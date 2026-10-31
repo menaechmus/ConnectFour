@@ -1,0 +1,848 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect Four tests</title>
+<style>
+  body { font: 14px/1.5 ui-monospace, Consolas, monospace; margin: 1rem; background: #111; color: #ddd; }
+  .fail { color: #ff7a7a; }
+  .pass { color: #8fd694; }
+</style>
+</head>
+<body>
+<h1 id="summary">Running…</h1>
+<pre id="out"></pre>
+<script type="module">
+import {
+  COLUMNS, ROWS, CELLS, TARGETS, other, emptyBoard, canDrop, openColumns, moverOf, boardOf, lineThrough,
+  newMatch, nextGame, drop, canTakeBack, takeBack,
+} from './js/game.js';
+import { think, threatsOf, positionOf, PROVED } from './js/engine.js';
+import { LEVELS, chooseMove, hint, answer, seedOf } from './js/ai.js';
+import { ask, cancelThinking, startThinker } from './js/thinker.js';
+import { emptyStats, loadStats, recordGame } from './js/stats.js';
+import { SOUNDS, renderSound } from './js/sound.js';
+import { createShow, advance, isOver } from './js/celebrate.js';
+import { newCode, cleanCode, linkPair } from './js/net.js';
+import { createHost, createGuest, cleanMove, seatView, sameState, deniedText } from './js/wifi.js';
+
+const results = [];
+const notes = [];
+
+// tests.html?only=rules runs just the tests with that word before the colon.
+const only = new URLSearchParams(location.search).get('only');
+const wanted = name => !only || name.startsWith(`${only}:`);
+
+function test(name, body) {
+  if (!wanted(name)) return;
+  try {
+    body();
+    results.push({ name, ok: true });
+  } catch (error) {
+    results.push({ name, ok: false, error: error.message });
+  }
+}
+
+async function testAsync(name, body) {
+  if (!wanted(name)) return;
+  try {
+    await body();
+    results.push({ name, ok: true });
+  } catch (error) {
+    results.push({ name, ok: false, error: error.message });
+  }
+}
+
+// Long enough for a few hops between links: nested timers wait 4 ms at least.
+const tick = (ms = 40) => new Promise(resolve => setTimeout(resolve, ms));
+
+function equal(actual, expected, label = 'value') {
+  const a = JSON.stringify(actual);
+  const e = JSON.stringify(expected);
+  if (a !== e) throw new Error(`${label}: expected ${e}, got ${a}`);
+}
+
+function throws(body, label) {
+  try {
+    body();
+  } catch {
+    return;
+  }
+  throw new Error(`${label}: expected an error`);
+}
+
+// Small seeded generator so the random checks are the same on every run.
+function seeded(seed) {
+  let s = seed >>> 0;
+  return () => {
+    s = (s + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// ---- Rules ------------------------------------------------------------------
+
+// Plays `columns` in turn for whoever is to move.
+function playAll(match, columns) {
+  for (const column of columns) drop(match, match.turn, column);
+  return match;
+}
+const started = (options = {}) => newMatch({ mode: 'local', ...options });
+
+// Games that end at once: side 0 stacks column 0 and side 1 column 1.
+const WIN_FOR_0 = [0, 1, 0, 1, 0, 1, 0];
+const WIN_FOR_1 = [0, 1, 0, 1, 0, 1, 2, 1];
+// Fills the board with no line of four: three columns one way up, then three
+// the other, and the middle column to finish.
+const DRAWN = [
+  0, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, // columns 0 and 1
+  2, 3, 2, 3, 2, 3, 3, 2, 3, 2, 3, 2, // columns 2 and 3
+  4, 5, 4, 5, 4, 5, 5, 4, 5, 4, 5, 4, // columns 4 and 5
+  6, 6, 6, 6, 6, 6,
+];
+
+test('rules: turns alternate and discs stack from the bottom', () => {
+  const match = started();
+  equal([match.turn, match.phase, match.gameNo], [0, 'play', 1], 'start');
+  drop(match, 0, 3);
+  drop(match, 1, 3);
+  equal(match.board[3], [0, 1], 'stacked');
+  equal(match.moves, [3, 3], 'moves');
+  equal(match.turn, 0, 'back to red');
+  equal(match.events, [{ type: 'drop', side: 1, column: 3, row: 1 }], 'events');
+});
+
+test('rules: out of turn, out of range and full columns are refused', () => {
+  const match = started();
+  throws(() => drop(match, 1, 3), 'not their turn');
+  for (const column of [-1, 7, 1.5, '3', null]) throws(() => drop(match, 0, column), `column ${column}`);
+  for (let i = 0; i < ROWS; i++) drop(match, match.turn, 2);
+  throws(() => drop(match, match.turn, 2), 'full');
+  equal(canDrop(match.board, 2), false, 'canDrop');
+  equal(openColumns(match.board), [0, 1, 3, 4, 5, 6], 'open columns');
+});
+
+test('rules: four in a row in every direction, to the edge of the board', () => {
+  const horizontal = started();
+  playAll(horizontal, [3, 3, 4, 4, 5, 5, 6]);
+  equal(horizontal.result, { winner: 0, line: [[3, 0], [4, 0], [5, 0], [6, 0]], stones: 7 }, 'along the bottom right');
+
+  const vertical = started();
+  playAll(vertical, [6, 0, 6, 0, 6, 0, 6]);
+  equal(vertical.result.line, [[6, 0], [6, 1], [6, 2], [6, 3]], 'up the edge');
+
+  const rising = started();
+  playAll(rising, [0, 1, 1, 2, 2, 3, 2, 3, 3, 6, 3]);
+  equal(rising.result.line, [[0, 0], [1, 1], [2, 2], [3, 3]], 'rising');
+
+  const falling = started();
+  playAll(falling, [6, 5, 5, 4, 4, 3, 4, 3, 3, 0, 3]);
+  equal(falling.result.line, [[3, 3], [4, 2], [5, 1], [6, 0]], 'falling');
+});
+
+test('rules: three in a row is nothing, and the sides do not add up', () => {
+  const match = started();
+  playAll(match, [0, 6, 1, 6, 2, 5]);
+  equal([match.result, match.phase], [null, 'play'], 'three red');
+  equal(lineThrough(boardOf([0, 6, 1, 6, 2], 0), 2, 0), [], 'no line');
+});
+
+test('rules: a fifth disc in the gap lights all five', () => {
+  const match = started();
+  playAll(match, [0, 0, 1, 1, 2, 2, 4, 4, 3]);
+  equal(match.result.line, [[0, 0], [1, 0], [2, 0], [3, 0], [4, 0]], 'five');
+});
+
+test('rules: one disc can complete two lines', () => {
+  const board = emptyBoard();
+  for (const column of [0, 1, 2, 4, 5, 6]) board[column].push(0);
+  board[3].push(0);
+  equal(lineThrough(board, 3, 0).length, 7, 'seven along the bottom');
+  const crossing = emptyBoard();
+  crossing[3] = [0, 0, 0, 0];
+  for (const column of [0, 1, 2]) crossing[column] = [1, 1, 1, 0];
+  equal(lineThrough(crossing, 3, 3), [[0, 3], [1, 3], [2, 3], [3, 0], [3, 1], [3, 2], [3, 3]], 'across and up');
+});
+
+test('rules: a full board with no line is a draw, which scores nothing', () => {
+  const match = started({ target: 3 });
+  playAll(match, DRAWN);
+  equal(match.moves.length, CELLS, 'full');
+  equal([match.phase, match.result, match.score, match.winner], ['between', { winner: null, line: [], stones: 42 }, [0, 0], null], 'drawn');
+  equal(match.events.at(-1), { type: 'draw' }, 'event');
+});
+
+test('rules: a draw never ends a match, even a match to 1', () => {
+  const match = started();
+  playAll(match, DRAWN);
+  equal([match.phase, match.winner], ['between', null], 'carries on');
+  nextGame(match);
+  equal([match.phase, match.gameNo, match.turn], ['play', 2, 1], 'next game, other side first');
+});
+
+test('rules: the forty-second disc can win, and then it is not a draw', () => {
+  // The drawn game with its last two columns played so that the top of
+  // column 6 finishes a line of four along the top row.
+  const moves = [
+    0, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0,
+    2, 3, 2, 3, 2, 3, 3, 2, 3, 2, 3, 2,
+    4, 5, 4, 5, 4, 5, 5, 4, 5, 4, 5, 4,
+    6, 6, 6, 6, 6,
+  ];
+  const board = boardOf(moves, 0);
+  const last = moverOf(0, 41);
+  for (const column of [3, 4, 5]) board[column][5] = last;
+  board[6].push(last);
+  equal(lineThrough(board, 6, 5).length >= 4, true, 'a line');
+  const match = started();
+  playAll(match, moves);
+  Object.assign(match, { board, moves: [...moves] });
+  match.board[6].pop();
+  drop(match, match.turn, 6);
+  equal([match.result.stones, match.result.winner, match.phase], [42, last, 'over'], 'a win');
+});
+
+test('rules: the match ends at its target, with a game between', () => {
+  // Whoever starts stacks column 0 and the other column 1, so these pick the
+  // winner whichever side is to start.
+  const winGame = (match, side) => playAll(match, side === match.turn ? WIN_FOR_0 : WIN_FOR_1);
+  const match = started({ target: 3 });
+  winGame(match, 0);
+  equal([match.phase, match.score, match.winner, match.result.winner], ['between', [1, 0], null, 0], 'first game');
+  throws(() => drop(match, match.turn, 2), 'no move between games');
+  nextGame(match);
+  equal([match.gameNo, match.board, match.moves, match.result], [2, emptyBoard(), [], null], 'cleared');
+  winGame(match, 1);
+  equal(match.score, [1, 1], 'level');
+  nextGame(match);
+  winGame(match, 0);
+  nextGame(match);
+  equal(match.score, [2, 1], 'two');
+  winGame(match, 1);
+  equal(match.score, [2, 2], 'two all');
+  nextGame(match);
+  winGame(match, 0);
+  equal([match.phase, match.winner, match.score], ['over', 0, [3, 2]], 'over');
+  throws(() => nextGame(match), 'no next game');
+});
+
+test('rules: match lengths are 1, 3 and 5', () => {
+  equal(TARGETS, [1, 3, 5], 'targets');
+  throws(() => newMatch({ target: 7 }), 'seven');
+  const match = started();
+  playAll(match, WIN_FOR_0);
+  equal([match.phase, match.winner], ['over', 0], 'one game is a match to 1');
+});
+
+test('rules: who starts', () => {
+  equal(newMatch({ mode: 'ai', first: 'you' }).turn, 0, 'you');
+  equal(newMatch({ mode: 'ai', first: 'computer' }).turn, 1, 'computer');
+  equal(newMatch({ mode: 'ai', first: 'turns', starter: 1 }).turn, 1, 'turns, as passed in');
+  const fixed = newMatch({ mode: 'ai', first: 'computer', target: 3 });
+  playAll(fixed, WIN_FOR_0);
+  nextGame(fixed);
+  equal(fixed.turn, 1, 'stays with the computer');
+  const turns = newMatch({ mode: 'ai', first: 'turns', target: 5 });
+  const starters = [];
+  for (let game = 0; game < 4; game++) {
+    starters.push(turns.turn);
+    playAll(turns, DRAWN);
+    nextGame(turns);
+  }
+  equal(starters, [0, 1, 0, 1], 'alternates through draws');
+});
+
+test('rules: moverOf and boardOf rebuild a game', () => {
+  equal([moverOf(1, 0), moverOf(1, 1), moverOf(0, 4)], [1, 0, 0], 'movers');
+  const match = started({ starter: 1, first: 'turns' });
+  playAll(match, [3, 2, 3, 4, 0]);
+  equal(boardOf(match.moves, match.starter), match.board, 'same board');
+});
+
+test('rules: a match survives JSON in every phase', () => {
+  const match = started({ target: 3 });
+  const round = () => JSON.parse(JSON.stringify(match));
+  equal(round(), match, 'at the start');
+  playAll(match, [3, 3]);
+  equal(round(), match, 'mid-game');
+  const copy = round();
+  drop(copy, 0, 5);
+  equal(copy.board[5], [0], 'plays on after a round trip');
+  playAll(match, [0, 1, 0, 1, 0, 1, 0]);
+  equal(round(), match, 'after a win');
+});
+
+// ---- Take-backs ---------------------------------------------------------------
+
+const versus = (options = {}) => newMatch({ mode: 'ai', difficulty: 'hard', first: 'you', ...options });
+
+test('undo: takes back your disc and the computer answer, and goes on back', () => {
+  const match = versus();
+  playAll(match, [3, 2, 4, 5]);
+  takeBack(match, 0);
+  equal([match.moves, match.turn, match.takeBacks], [[3, 2], 0, 1], 'one turn back');
+  equal(match.board[4], [], 'your disc gone');
+  equal(match.board[5], [], 'theirs too');
+  equal(match.events, [{ type: 'takeback', side: 0, removed: [{ side: 1, column: 5, row: 0 }, { side: 0, column: 4, row: 0 }] }], 'event');
+  takeBack(match, 0);
+  equal([match.moves, match.board, match.takeBacks], [[], emptyBoard(), 2], 'all the way');
+  equal(canTakeBack(match, 0), false, 'nothing left');
+  throws(() => takeBack(match, 0), 'empty board');
+});
+
+test('undo: while the computer is to move, only your own disc comes back', () => {
+  const match = versus();
+  playAll(match, [3, 2, 4]);
+  equal(match.turn, 1, 'computer to move');
+  takeBack(match, 0);
+  equal([match.moves, match.turn], [[3, 2], 0], 'one disc');
+});
+
+test('undo: when the computer started, its first disc stays', () => {
+  const match = versus({ first: 'computer' });
+  drop(match, 1, 3);
+  equal(canTakeBack(match, 0), false, 'no disc of yours');
+  drop(match, 0, 2);
+  drop(match, 1, 4);
+  takeBack(match, 0);
+  equal([match.moves, match.turn], [[3], 0], 'back to its first disc');
+});
+
+test('undo: the move that lost can be taken back, restoring score and phase', () => {
+  const match = versus({ target: 3 });
+  playAll(match, [0, 1, 0, 1, 0, 1, 6, 1]);
+  equal([match.phase, match.score, match.result.winner], ['between', [0, 1], 1], 'lost the game');
+  takeBack(match, 0);
+  equal([match.phase, match.score, match.result, match.winner, match.turn], ['play', [0, 0], null, null, 0], 'back in it');
+  equal(match.moves, [0, 1, 0, 1, 0, 1], 'before the blunder');
+  drop(match, 0, 1);
+  equal(match.board[1].at(-1), 0, 'and can block');
+});
+
+test('undo: even a lost match can be taken back', () => {
+  const match = versus();
+  playAll(match, [0, 1, 0, 1, 0, 1, 6, 1]);
+  equal([match.phase, match.winner, match.score], ['over', 1, [0, 1]], 'match lost');
+  takeBack(match, 0);
+  equal([match.phase, match.winner, match.score], ['play', null, [0, 0]], 'match back on');
+});
+
+test('undo: a draw can be taken back, a win cannot', () => {
+  const drawn = versus({ target: 3 });
+  playAll(drawn, DRAWN);
+  equal(canTakeBack(drawn, 0), true, 'draw');
+  takeBack(drawn, 0);
+  equal([drawn.phase, drawn.result, drawn.moves.length, drawn.score], ['play', null, 40, [0, 0]], 'two discs back');
+  const won = versus({ target: 3 });
+  playAll(won, WIN_FOR_0);
+  equal(canTakeBack(won, 0), false, 'a win stays');
+  throws(() => takeBack(won, 0), 'refused');
+});
+
+test('undo: only against the computer, only when switched on, only in this game', () => {
+  const people = newMatch({ mode: 'local' });
+  playAll(people, [3, 3]);
+  equal(canTakeBack(people, 0), false, 'people');
+  throws(() => takeBack(people, 0), 'people refused');
+  const wifi = newMatch({ mode: 'net', undo: true });
+  playAll(wifi, [3, 3]);
+  equal(canTakeBack(wifi, 0), false, 'Wi-Fi');
+  const off = versus({ undo: false });
+  playAll(off, [3, 3]);
+  equal(canTakeBack(off, 0), false, 'switched off');
+  const later = versus({ target: 3 });
+  playAll(later, WIN_FOR_0);
+  nextGame(later);
+  equal([later.takeBacks, canTakeBack(later, 0)], [0, false], 'a new game starts clean');
+});
+
+test('undo: a game replayed after take-backs is the same as one without', () => {
+  const direct = versus();
+  playAll(direct, [3, 2, 4, 5, 0]);
+  const taken = versus();
+  playAll(taken, [3, 2, 6, 6]);
+  takeBack(taken, 0);
+  playAll(taken, [4, 5, 0]);
+  equal([taken.board, taken.moves, taken.turn], [direct.board, direct.moves, direct.turn], 'same position');
+});
+
+// ---- The search ---------------------------------------------------------------
+
+// A random game still in progress after `stones` discs, as its list of moves.
+function randomPosition(random, stones) {
+  for (;;) {
+    const board = emptyBoard();
+    const moves = [];
+    let ended = false;
+    while (moves.length < stones && !ended) {
+      const open = openColumns(board);
+      const column = open[Math.floor(random() * open.length)];
+      board[column].push(moves.length % 2);
+      ended = lineThrough(board, column, board[column].length - 1).length > 0;
+      moves.push(column);
+    }
+    if (!ended) return moves;
+  }
+}
+
+// Every empty cell where a disc would make four for `side`, the slow way.
+function slowThreats(board, side) {
+  let lo = 0;
+  let hi = 0;
+  board.forEach((discs, column) => {
+    for (let row = discs.length; row < ROWS; row++) {
+      const trial = board.map(list => [...list]);
+      trial[column][row] = side; // gaps below stay gaps, which lineThrough never crosses
+      if (lineThrough(trial, column, row).length) {
+        if (column < 4) lo |= 1 << (7 * column + row);
+        else hi |= 1 << (7 * (column - 4) + row);
+      }
+    }
+  });
+  return [lo, hi];
+}
+
+// The true score of each move for the side to move, with no cleverness at all:
+// every line played out, remembering boards already seen.
+function bruteScores(moves) {
+  const board = boardOf(moves, 0);
+  const seen = new Map();
+  const after = (column, stones, side) => {
+    const row = board[column].length;
+    board[column].push(side);
+    const value = lineThrough(board, column, row).length ? 1000 - (stones + 1) : -best(stones + 1, other(side));
+    board[column].pop();
+    return value;
+  };
+  const best = (stones, side) => {
+    if (stones === CELLS) return 0;
+    const key = board.map(column => column.join('')).join('/');
+    if (!seen.has(key)) seen.set(key, Math.max(...openColumns(board).map(column => after(column, stones, side))));
+    return seen.get(key);
+  };
+  const values = new Array(COLUMNS).fill(null);
+  for (const column of openColumns(board)) values[column] = after(column, moves.length, moves.length % 2);
+  return values;
+}
+
+test('engine: bit threats agree with the rules on random boards', () => {
+  const random = seeded(11);
+  for (let i = 0; i < 2000; i++) {
+    const moves = randomPosition(random, Math.floor(random() * 41));
+    const board = boardOf(moves, 0);
+    const { pLo, pHi, mLo, mHi, stones } = positionOf(moves);
+    const mover = stones % 2;
+    equal(threatsOf(pLo, pHi, mLo, mHi), slowThreats(board, mover), `the mover's threats after ${moves}`);
+    equal(threatsOf(pLo ^ mLo, pHi ^ mHi, mLo, mHi), slowThreats(board, other(mover)), `the other's threats after ${moves}`);
+  }
+});
+
+test('engine: no two positions share a key', () => {
+  const random = seeded(12);
+  const seen = new Map();
+  for (let i = 0; i < 20000; i++) {
+    const moves = randomPosition(random, Math.floor(random() * 30));
+    const { pLo, pHi, mLo, mHi } = positionOf(moves);
+    const key = `${pLo + mLo}:${pHi + mHi}`;
+    const shape = boardOf(moves, 0).map(column => column.join('')).join('/') + moves.length % 2;
+    if (seen.has(key)) equal(seen.get(key), shape, 'same key, same position');
+    seen.set(key, shape);
+  }
+  notes.push(`${seen.size} distinct positions checked for key clashes`);
+});
+
+for (const [bits, name] of [[16, 'a normal table'], [4, 'a table of sixteen slots']]) {
+  test(`engine: exact scores match playing out every line, with ${name}`, () => {
+    const random = seeded(13);
+    for (let i = 0; i < 120; i++) {
+      const moves = randomPosition(random, 32 + Math.floor(random() * 8));
+      const expected = bruteScores(moves);
+      const { values, solved } = think(moves, { all: true, fresh: true, bits, seed: i + 1 });
+      equal(values, expected, `every move after ${moves}`);
+      equal(solved, true, `solved after ${moves}`);
+    }
+  });
+}
+
+test('engine: the move it picks keeps the best result, late in the game', () => {
+  const random = seeded(14);
+  for (let i = 0; i < 300; i++) {
+    const moves = randomPosition(random, 28 + Math.floor(random() * 12));
+    const expected = bruteScores(moves);
+    const best = Math.max(...expected.filter(value => value !== null));
+    const { column, score, solved, reason } = think(moves, { fresh: true, bits: 16, seed: i + 1, ms: 2000 });
+    equal(solved || reason !== 'search', true, `solved after ${moves}`); // an only move needs no search
+    equal(Math.sign(expected[column]), Math.sign(best), `the result of column ${column} after ${moves}, scored ${score}`);
+  }
+});
+
+test('engine: takes a win and blocks a loss', () => {
+  equal(think([0, 1, 0, 1, 0, 1]).column, 0, 'wins');
+  equal(think([0, 1, 0, 1, 0, 6]).column, 0, 'wins rather than anything else');
+  equal(think([3, 0, 3, 0, 3]).column, 3, 'blocks a column');
+});
+
+test('engine: never plays a full column', () => {
+  const moves = [3, 3, 3, 3, 3, 3];
+  for (let seed = 1; seed < 30; seed++) {
+    const { column } = think(moves, { depth: 4, noise: 25, seed, fresh: true, bits: 12 });
+    equal(column === 3, false, `seed ${seed}`);
+  }
+});
+
+test('engine: gives a legal move on the smallest budget, and keeps to its budget', () => {
+  const { column } = think([2, 4], { nodes: 1, fresh: true });
+  equal(Number.isInteger(column) && column >= 0 && column < COLUMNS, true, 'legal');
+  const limited = think([2, 4], { nodes: 50000, fresh: true });
+  equal(limited.nodes < 50000 + 2048, true, `stopped at ${limited.nodes}`);
+  const started = performance.now();
+  think([2, 4, 1], { ms: 100, fresh: true });
+  equal(performance.now() - started < 400, true, 'stopped on time');
+});
+
+test('engine: the same question gets the same answer', () => {
+  const ask = () => think([3, 2, 3, 4, 1], { nodes: 30000, fresh: true, seed: 5 });
+  equal(ask(), ask(), 'twice');
+  const noisy = () => think([3, 2], { noise: 25, depth: 4, seed: 7, fresh: true }).column;
+  equal(noisy(), noisy(), 'with noise');
+});
+
+test('engine: plays the proved opening only from the book', () => {
+  equal(think([], { book: true }).column, 3, 'the middle');
+  equal(think([3], { book: true }).column, 3, 'and on top of it');
+  equal(think([0], { book: true, fresh: true, nodes: 2000 }).reason, 'search', 'no book elsewhere');
+});
+
+test('engine: an empty board is not taken for an empty slot', () => {
+  const { nodes, depth } = think([], { depth: 6, fresh: true, bits: 8 });
+  equal(depth, 6, 'reached its depth');
+  equal(nodes > 100, true, `searched, ${nodes} nodes`);
+});
+
+test('engine: a mirror-image position can go either way', () => {
+  const picks = new Set();
+  for (let seed = 1; seed < 40; seed++) picks.add(think([3, 3, 3, 3, 2, 4], { depth: 6, seed, fresh: true, bits: 12 }).column);
+  equal(picks.size > 1, true, `picked ${[...picks]}`);
+});
+
+test('engine: a lost side stays near the longest loss', () => {
+  const random = seeded(15);
+  let tried = 0;
+  for (let i = 0; i < 400 && tried < 40; i++) {
+    const moves = randomPosition(random, 30 + Math.floor(random() * 6));
+    const expected = bruteScores(moves);
+    const best = Math.max(...expected.filter(value => value !== null));
+    if (best >= 0) continue;
+    const { column, solved, reason } = think(moves, { defend: true, fresh: true, bits: 16, ms: 3000 });
+    equal(solved || reason !== 'search', true, 'solved');
+    equal(expected[column] >= best - 2, true, `after ${moves}: ${expected} chose ${column}`);
+    tried++;
+  }
+  equal(tried >= 10, true, `lost positions tried: ${tried}`);
+});
+
+test('computer: Easy takes most wins and blocks, not all', () => {
+  let wins = 0;
+  let blocks = 0;
+  for (let seed = 1; seed <= 400; seed++) {
+    if (chooseMove({ moves: [0, 1, 0, 1, 0, 2], level: 'easy', seed }).column === 0) wins++;
+    if (chooseMove({ moves: [3, 0, 3, 0, 3], level: 'easy', seed }).column === 3) blocks++;
+  }
+  equal(wins > 340 && wins < 400, true, `took ${wins} of 400 wins`);
+  equal(blocks > 240 && blocks < 400, true, `blocked ${blocks} of 400`);
+});
+
+test('computer: Medium and up never miss a win or a block', () => {
+  for (const level of ['medium', 'hard', 'guru']) {
+    for (let seed = 1; seed <= 20; seed++) {
+      equal(chooseMove({ moves: [0, 1, 0, 1, 0, 6], level, seed, fresh: true }).column, 0, `${level} wins`);
+      equal(chooseMove({ moves: [3, 0, 3, 0, 3], level, seed, fresh: true }).column, 3, `${level} blocks`);
+    }
+  }
+});
+
+test('computer: seeds come from the match and stay put through JSON', () => {
+  const match = newMatch({ mode: 'ai', target: 3 });
+  const seed = seedOf(match);
+  equal(seedOf(JSON.parse(JSON.stringify(match))), seed, 'the same');
+  match.gameNo++;
+  equal(seedOf(match) === seed, false, 'another game, another seed');
+});
+
+test('computer: a hint is a legal column, in words', () => {
+  equal(hint({ moves: [0, 1, 0, 1, 0, 2] }).text, 'Column 1 wins the game.', 'a win');
+  equal(hint({ moves: [3, 0, 3, 0, 3] }).text, 'Column 4 blocks a win for the other side.', 'a block');
+  equal(hint({ moves: [] }).column, 3, 'the opening');
+  const { column, text } = hint({ moves: [3, 2, 4], limit: { nodes: 20000 }, fresh: true });
+  equal(column >= 0 && column < COLUMNS && text.length > 0, true, text);
+});
+
+test('computer: answer() routes questions', () => {
+  equal(answer({ type: 'move', moves: [0, 1, 0, 1, 0, 2], level: 'hard' }).column, 0, 'a move');
+  equal(answer({ type: 'hint', moves: [0, 1, 0, 1, 0, 2] }).column, 0, 'a hint');
+});
+
+// ---- Statistics ---------------------------------------------------------------
+
+const finished = (winner, { mode = 'ai', difficulty = 'hard', stones = 20, takeBacks = 0, players = [{ name: 'You' }, { name: 'Computer', ai: true }] } = {}) => ({
+  mode, difficulty, takeBacks, players, result: { winner, stones, line: [] },
+});
+
+test('stats: wins, losses and streaks by level', () => {
+  const stats = emptyStats();
+  for (const winner of [0, 0, 1, 0]) recordGame(stats, finished(winner));
+  equal(stats.ai.hard, { games: 4, wins: 3, draws: 0, streak: 1, bestStreak: 2, assisted: 0 }, 'hard');
+  equal(stats.ai.guru.games, 0, 'other levels untouched');
+});
+
+test('stats: a draw counts, and leaves a streak alone', () => {
+  const stats = emptyStats();
+  recordGame(stats, finished(0));
+  recordGame(stats, finished(null, { stones: 42 }));
+  recordGame(stats, finished(0));
+  equal(stats.ai.hard, { games: 3, wins: 2, draws: 1, streak: 2, bestStreak: 2, assisted: 0 }, 'row');
+  equal(stats.records.longestGame, 42, 'longest');
+});
+
+test('stats: a win with take-backs earns no streak or record', () => {
+  const stats = emptyStats();
+  recordGame(stats, finished(0, { stones: 15 }));
+  recordGame(stats, finished(0, { stones: 7, takeBacks: 2 }));
+  equal(stats.ai.hard, { games: 2, wins: 2, draws: 0, streak: 1, bestStreak: 1, assisted: 1 }, 'row');
+  equal(stats.records.fastestWin, 8, 'fastest stays with the fair win');
+  recordGame(stats, finished(1, { takeBacks: 1 }));
+  equal(stats.ai.hard.streak, 0, 'a loss still ends a streak');
+});
+
+test('stats: the fastest win is the winner\'s own moves, and 0 means none yet', () => {
+  const stats = emptyStats();
+  recordGame(stats, finished(1, { stones: 8 }));
+  equal(stats.records.fastestWin, 0, 'a loss is no win');
+  recordGame(stats, finished(0, { stones: 13 }));
+  equal(stats.records.fastestWin, 7, 'thirteen discs, seven of them yours');
+  recordGame(stats, finished(0, { stones: 8 }));
+  equal(stats.records.fastestWin, 4, 'faster, when the computer started');
+  recordGame(stats, finished(0, { stones: 30 }));
+  equal(stats.records.fastestWin, 4, 'a slower one changes nothing');
+});
+
+test('stats: games between people, by name', () => {
+  const stats = emptyStats();
+  const players = [{ name: 'Ann' }, { name: 'Ben' }];
+  recordGame(stats, finished(0, { mode: 'local', players }));
+  recordGame(stats, finished(null, { mode: 'net', players: [{ name: 'ANN' }, { name: 'Ben' }] }));
+  equal(stats.people.ann, { name: 'ANN', games: 2, wins: 1, draws: 1 }, 'Ann, latest spelling');
+  equal(stats.people.ben, { name: 'Ben', games: 2, wins: 0, draws: 1 }, 'Ben');
+  equal(stats.ai.hard.games, 0, 'not against the computer');
+  equal(stats.records.longestGame, 0, 'records are against the computer');
+});
+
+test('stats: damaged saves fall back to zero', () => {
+  const stats = loadStats({ ai: { hard: { games: 'lots', wins: 4 }, guru: 7 }, people: { ann: { name: 'Ann', games: 3 }, odd: 5 }, records: null, extra: 1 });
+  equal(stats.ai.hard, { games: 0, wins: 4, draws: 0, streak: 0, bestStreak: 0, assisted: 0 }, 'hard');
+  equal(stats.ai.guru.games, 0, 'guru');
+  equal(stats.people, { ann: { name: 'Ann', games: 3, wins: 0, draws: 0 } }, 'people');
+  equal(stats.records, { fastestWin: 0, longestGame: 0 }, 'records');
+  equal(loadStats(null), emptyStats(), 'nothing saved');
+});
+
+test('stats: a save from a game really played', () => {
+  const stats = emptyStats();
+  const match = newMatch({ mode: 'ai', difficulty: 'guru', first: 'you' });
+  playAll(match, WIN_FOR_0);
+  recordGame(stats, match);
+  equal([stats.ai.guru.wins, stats.records.fastestWin], [1, 4], 'a win in four');
+});
+
+// ---- Wi-Fi ----------------------------------------------------------------------
+
+const V = '1.0.0';
+
+// Gives a host links, as net.js would.
+function dialling(host) {
+  const links = [];
+  return {
+    links,
+    connect: async () => {
+      const [mine, theirs] = linkPair();
+      links.push(mine);
+      host.attach(theirs);
+      return mine;
+    },
+  };
+}
+
+test('wifi: a guest\'s move is rebuilt, or dropped', () => {
+  equal(cleanMove({ t: 'drop', column: 3, extra: 'x' }), { t: 'drop', column: 3 }, 'drop');
+  equal(cleanMove({ t: 'next', game: 2, column: 9 }), { t: 'next', game: 2 }, 'next');
+  for (const column of [7, -1, 1.5, '3', null, undefined]) equal(cleanMove({ t: 'drop', column }), null, `column ${column}`);
+  for (const game of [0, -1, 1.5, '2']) equal(cleanMove({ t: 'next', game }), null, `game ${game}`);
+  equal(cleanMove({ t: 'takeback' }), null, 'no take-backs over Wi-Fi');
+  equal(cleanMove(null), null, 'nothing');
+});
+
+test('wifi: a phone is sent all of the match but the seats', () => {
+  const match = newMatch({ mode: 'net' });
+  match.net = { code: 'ABCD', seats: [{ name: 'Hana', token: 'secret' }] };
+  const view = seatView(match);
+  equal('net' in view, false, 'no tokens');
+  equal(view.board, match.board, 'the board');
+  equal(sameState(view, seatView(match)), true, 'the same');
+  drop(match, 0, 3);
+  equal(sameState(view, seatView(match)), false, 'moved on');
+});
+
+await testAsync('wifi: join, play a move, be refused, come back on a new link', async () => {
+  const moves = [];
+  let match = null;
+  // As the page does: whoever comes back is sent the match.
+  const onchange = () => match && host.share(match);
+  const host = createHost({ name: 'Hana', version: V, onmove: (seat, move) => moves.push([seat, move]), onchange });
+  const { links, connect } = dialling(host);
+  const heard = [];
+  const ups = [];
+  const guest = createGuest({ name: 'Gus', token: 'tab1', version: V, connect, onmessage: message => heard.push(message), onlink: up => ups.push(up), retryMs: 20 });
+  await guest.join();
+  equal(heard.map(message => message.t), ['lobby'], 'in the lobby');
+  equal(heard[0].players.map(player => player.name), ['Hana', 'Gus'], 'both there');
+  match = newMatch({ mode: 'net', players: host.begin() });
+  host.share(match);
+  await tick();
+  const state = heard.at(-1);
+  equal([state.t, state.seat, state.game.board], ['state', 1, match.board], 'the match');
+  guest.send({ t: 'drop', column: 9 });
+  guest.send({ t: 'drop', column: 2, sneaky: true });
+  await tick();
+  equal(moves, [[1, { t: 'drop', column: 2 }]], 'only a clean move arrives');
+  host.refuse(1, 'Not yet');
+  await tick();
+  equal(heard.at(-1), { t: 'refused', message: 'Not yet' }, 'refused');
+  links[0].close();
+  await tick(60);
+  equal([links.length, ups, host.away()], [2, [true, false, true], [false, false]], 'back on a second link');
+  guest.leave();
+});
+
+await testAsync('wifi: another version, a full game and a game under way are turned away', async () => {
+  const host = createHost({ name: 'Hana', version: V, onmove: () => {} });
+  const { connect } = dialling(host);
+  let said = '';
+  await createGuest({ name: 'Old', token: 'tab0', version: '0.9.0', connect }).join().catch(error => (said = error.message));
+  equal(said, deniedText({ why: 'version', version: V }, '0.9.0'), 'version');
+  const first = createGuest({ name: 'Gus', token: 'tab1', version: V, connect });
+  await first.join();
+  said = '';
+  await createGuest({ name: 'Cy', token: 'tab2', version: V, connect }).join().catch(error => (said = error.message));
+  equal(said, deniedText({ why: 'full' }, V), 'full');
+  host.begin();
+  said = '';
+  await createGuest({ name: 'Di', token: 'tab3', version: V, connect }).join().catch(error => (said = error.message));
+  equal(said, deniedText({ why: 'started' }, V), 'started');
+  first.leave();
+});
+
+test('wifi: codes are four letters with no I or O, and typing is forgiven', () => {
+  const random = seeded(16);
+  for (let i = 0; i < 200; i++) equal(/^[A-HJ-NP-Z]{4}$/.test(newCode(random)), true, 'a code');
+  equal(cleanCode(' ab-cd9e '), 'ABCD', 'cleaned');
+});
+
+// ---- Sound and the celebration ----------------------------------------------------
+
+await testAsync('sound: every effect makes a sound of a sensible length', async () => {
+  const seconds = { drop: 0.3, place: 0.2, clear: 0.8, chime: 0.9, draw: 0.8, win: 6, firework: 1, turn: 0.6, lose: 1 };
+  equal([...SOUNDS].sort(), Object.keys(seconds).sort(), 'the list');
+  for (const name of SOUNDS) {
+    const context = new OfflineAudioContext(1, Math.ceil(44100 * seconds[name]), 44100);
+    renderSound(name, context, 0.01);
+    const samples = (await context.startRendering()).getChannelData(0);
+    let peak = 0;
+    for (const sample of samples) peak = Math.max(peak, Math.abs(sample));
+    equal(peak > 0.01, true, `${name} is heard, peak ${peak}`);
+    equal(peak <= 1.5, true, `${name} is not too loud, peak ${peak}`);
+  }
+});
+
+test('celebration: the show runs and ends by itself', () => {
+  const show = createShow(390, 844, seeded(17));
+  let elapsed = 0;
+  while (!isOver(show) && elapsed < 10) {
+    advance(show, 0.033);
+    elapsed += 0.033;
+  }
+  equal(isOver(show), true, 'over');
+  equal(elapsed > 2 && elapsed <= 6, true, `after ${elapsed.toFixed(1)} s`);
+});
+
+// ---- The worker -------------------------------------------------------------------
+
+await testAsync('worker: a question goes there and comes back', async () => {
+  startThinker();
+  const { column } = await ask({ type: 'move', moves: [0, 1, 0, 1, 0, 2], level: 'hard', seed: 1 });
+  equal(column, 0, 'the win');
+  const { text } = await ask({ type: 'hint', moves: [3, 0, 3, 0, 3], seed: 1 });
+  equal(text, 'Column 4 blocks a win for the other side.', 'a hint');
+});
+
+await testAsync('worker: a cancelled question rejects, and the next is answered', async () => {
+  const asked = ask({ type: 'move', moves: [3, 2], level: 'guru', seed: 2, limit: { ms: 20000 } });
+  const waiting = ask({ type: 'move', moves: [3, 2, 1], level: 'hard', seed: 2 });
+  await tick(50);
+  cancelThinking();
+  const outcomes = await Promise.allSettled([asked, waiting]);
+  equal(outcomes.map(outcome => outcome.status), ['rejected', 'rejected'], 'both dropped');
+  const started = performance.now();
+  const { column } = await ask({ type: 'move', moves: [0, 1, 0, 1, 0, 2], level: 'hard', seed: 3 });
+  equal(column, 0, 'answered by a new worker');
+  equal(performance.now() - started < 3000, true, 'without waiting for the old search');
+});
+
+// ---- The levels, playing each other -------------------------------------------------
+
+function playOut(levels, seed) {
+  const moves = [];
+  const board = emptyBoard();
+  while (moves.length < CELLS) {
+    const side = moves.length % 2;
+    const { column } = chooseMove({ moves, level: levels[side], seed });
+    const row = board[column].length;
+    board[column].push(side);
+    moves.push(column);
+    if (lineThrough(board, column, row).length) return side;
+  }
+  return null;
+}
+
+const levelsStarted = performance.now();
+for (const [a, b, games, atLeast] of [['medium', 'easy', 60, 0.8], ['hard', 'medium', 24, 0.8]]) {
+  test(`self-play: ${a} beats ${b} over ${games} games, swapping who starts`, () => {
+    let wins = 0;
+    for (let i = 0; i < games; i++) {
+      const levels = i % 2 ? [b, a] : [a, b];
+      if (playOut(levels, i + 1) === i % 2) wins++;
+    }
+    equal(wins / games >= atLeast, true, `${wins} of ${games}`);
+  });
+}
+notes.push(`self-play took ${Math.round(performance.now() - levelsStarted)} ms`);
+
+// ---- Results ------------------------------------------------------------------
+
+const failed = results.filter(result => !result.ok);
+const out = document.getElementById('out');
+for (const result of results) {
+  const line = document.createElement('div');
+  line.className = result.ok ? 'pass' : 'fail';
+  line.textContent = `${result.ok ? 'ok  ' : 'FAIL'} ${result.name}${result.ok ? '' : `\n     ${result.error}`}`;
+  out.append(line);
+}
+for (const note of notes) out.append(`\n${note}`);
+const summary = `${failed.length ? 'FAILED' : 'PASSED'} ${results.length - failed.length}/${results.length}`;
+document.getElementById('summary').textContent = summary;
+document.title = summary;
+</script>
+</body>
+</html>

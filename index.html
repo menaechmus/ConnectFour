@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b3521">
+<meta name="description" content="Play Connect Four in your browser against the computer, a friend on the same device, or on two phones over Wi-Fi.">
+<title>Connect Four</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 rx=%2220%22 fill=%22%231f5fbf%22/><circle cx=%2232%22 cy=%2268%22 r=%2213%22 fill=%22%23d8322f%22/><circle cx=%2268%22 cy=%2268%22 r=%2213%22 fill=%22%23f7c936%22/><circle cx=%2232%22 cy=%2232%22 r=%2213%22 fill=%22%230d2f63%22/><circle cx=%2268%22 cy=%2232%22 r=%2213%22 fill=%22%23d8322f%22/></svg>">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<main id="menu" class="screen menu">
+  <header class="title">
+    <div class="emblem" aria-hidden="true">
+      <span class="piece disc red"></span>
+      <span class="piece disc yellow"></span>
+      <span class="piece disc red"></span>
+      <span class="piece disc yellow"></span>
+    </div>
+    <h1>Connect Four</h1>
+  </header>
+
+  <div class="options">
+    <div class="option">
+      <span>Play against</span>
+      <div class="choice" data-setting="mode">
+        <button data-value="ai">Computer</button>
+        <button data-value="local">People</button>
+        <button data-value="net">Wi-Fi</button>
+      </div>
+    </div>
+    <div class="option" id="row-difficulty">
+      <span>Difficulty</span>
+      <div class="choice tight" data-setting="difficulty">
+        <button data-value="easy">Easy</button>
+        <button data-value="medium">Medium</button>
+        <button data-value="hard">Hard</button>
+        <button data-value="guru">Guru</button>
+      </div>
+    </div>
+    <div class="option" id="row-first">
+      <span>First move</span>
+      <div class="choice tight" data-setting="first">
+        <button data-value="you">You</button>
+        <button data-value="computer">Computer</button>
+        <button data-value="turns">Take turns</button>
+      </div>
+    </div>
+    <div class="names" id="row-names">
+      <input data-name="0" maxlength="12" placeholder="Player 1" aria-label="Player 1 name" autocomplete="off" spellcheck="false">
+      <input data-name="1" maxlength="12" placeholder="Player 2" aria-label="Player 2 name" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="option" id="row-wifi-name">
+      <label for="wifi-name">Your name</label>
+      <input id="wifi-name" class="wifi-name" maxlength="12" placeholder="Needed to play" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="option">
+      <span>Match to</span>
+      <div class="choice" data-setting="target">
+        <button data-value="1">1</button>
+        <button data-value="3">3</button>
+        <button data-value="5">5</button>
+      </div>
+    </div>
+    <div class="switches">
+      <div class="option">
+        <span>Hints</span>
+        <div class="choice" data-setting="hints">
+          <button data-value="true">On</button>
+          <button data-value="false">Off</button>
+        </div>
+      </div>
+      <div class="option" id="row-undo">
+        <span>Undo</span>
+        <div class="choice" data-setting="undo">
+          <button data-value="true">On</button>
+          <button data-value="false">Off</button>
+        </div>
+      </div>
+      <div class="option">
+        <span>Sound</span>
+        <div class="choice" data-setting="sound">
+          <button data-value="true">On</button>
+          <button data-value="false">Off</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="menu-actions">
+    <button id="btn-resume" class="btn primary" hidden>Resume game</button>
+    <button id="btn-new" class="btn primary">New game</button>
+    <div class="row" id="row-wifi">
+      <button id="btn-host" class="btn primary">Host a game</button>
+      <button id="btn-join" class="btn primary">Join a game</button>
+    </div>
+    <div class="row">
+      <button id="btn-stats" class="btn">Statistics</button>
+      <button id="btn-rules" class="btn">How to play</button>
+      <button id="btn-about" class="icon-btn" aria-label="About">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle class="line" cx="12" cy="12" r="9"/>
+          <path class="line" d="M12 11v6"/>
+          <circle cx="12" cy="7.5" r="1.3"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+</main>
+
+<main id="table" class="screen table" hidden>
+  <header class="topbar">
+    <button id="btn-menu" class="icon-btn" aria-label="Menu">☰</button>
+    <div id="scores" class="scores">
+      <div class="score" data-side="0"><i></i><span class="who"><span class="name"></span><span class="note"></span></span><span class="points"></span></div>
+      <div class="score" data-side="1"><i></i><span class="who"><span class="name"></span><span class="note"></span></span><span class="points"></span></div>
+    </div>
+  </header>
+
+  <div id="board" class="board"></div>
+
+  <div class="status" role="status" aria-live="polite">
+    <p id="events"></p>
+    <p id="prompt"></p>
+  </div>
+
+  <footer class="actions">
+    <button id="btn-sound" class="icon-btn" aria-label="Sound" aria-pressed="true">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 9v6h4l5 4V5L8 9z"/>
+        <path class="line on" d="M16.5 9a4.5 4.5 0 0 1 0 6M19 6.5a8 8 0 0 1 0 11"/>
+        <path class="line off" d="M17 9.5l5 5M22 9.5l-5 5"/>
+      </svg>
+    </button>
+    <button id="btn-hint" class="btn">Hint</button>
+    <button id="btn-undo" class="btn">Undo</button>
+    <button id="btn-main" class="btn primary" hidden></button>
+  </footer>
+</main>
+
+<div id="wifi" class="overlay" hidden>
+  <div class="dialog">
+    <h2 id="wifi-title">Wi-Fi game</h2>
+    <p id="wifi-text" class="muted"></p>
+    <div id="wifi-code" class="wifi-code" role="img" hidden></div>
+    <input id="join-code" class="join-code" maxlength="4" placeholder="CODE" aria-label="Code" autocomplete="off" autocapitalize="characters" spellcheck="false" hidden>
+    <button id="btn-share" class="btn share" hidden>Share link</button>
+    <ul id="wifi-players" class="wifi-players" aria-label="Players" hidden></ul>
+    <p id="wifi-status" class="wifi-status" aria-live="polite"></p>
+    <div class="row">
+      <button id="btn-wifi-cancel" class="btn">Cancel</button>
+      <button id="btn-wifi-go" class="btn primary">Start</button>
+    </div>
+  </div>
+</div>
+
+<div id="confirm" class="overlay" hidden>
+  <div class="dialog">
+    <h2 id="confirm-title"></h2>
+    <p id="confirm-text" class="muted"></p>
+    <div class="row">
+      <button class="btn" data-close>Cancel</button>
+      <button id="btn-confirm" class="btn primary"></button>
+    </div>
+  </div>
+</div>
+
+<div id="gameover" class="overlay" hidden>
+  <canvas id="party" width="0" height="0" aria-hidden="true"></canvas>
+  <div id="gameover-body" class="dialog"></div>
+</div>
+
+<div id="stats" class="overlay" hidden>
+  <div class="dialog wide">
+    <h2>Statistics</h2>
+    <div id="stats-body" class="stack"></div>
+    <div class="row">
+      <button id="btn-reset" class="btn danger">Reset statistics</button>
+      <button class="btn primary" data-close>Close</button>
+    </div>
+  </div>
+</div>
+
+<div id="rules" class="overlay" hidden>
+  <div class="dialog wide">
+    <h2>How to play</h2>
+    <ol class="rules">
+      <li><b>The aim.</b> Take turns dropping a disc into one of the seven columns. It falls to the lowest empty space. The first to line up four of their own discs wins: across, up and down, or on a slant.</li>
+      <li><b>A full board.</b> If all 42 spaces fill with no line of four, the game is a draw. Nobody scores, and in a match the next game starts.</li>
+      <li><b>A match.</b> The first to win the number of games set on the menu wins the match. With Take turns, the first move passes to the other side each game, draws included.</li>
+      <li><b>Moving first.</b> It matters more than it looks. With perfect play, whoever moves first and starts in the middle column always wins.</li>
+      <li><b>The computer.</b> Easy overlooks things. Medium sees a couple of moves ahead, and Hard several more. Guru thinks for a moment over each move, and plays perfectly as soon as it can work the rest of the game out.</li>
+      <li><b>Undo.</b> Against the computer, Undo takes back your last move and its reply, as many times as you like, even after you lose or draw. A win that used Undo still counts as a win, but it doesn't add to your streak or set a record, and the statistics list it separately.</li>
+    </ol>
+    <p class="muted">Wi-Fi: each of you plays on your own phone. One chooses Wi-Fi on the menu, types a name and taps Host a game; the other chooses Wi-Fi, taps Join a game and enters the four letters on the host's screen, or opens the link the host shares. The host's match length and hints settings apply to both. A phone that drops out comes back by itself, and while it is away the host can play for it.</p>
+    <p class="muted">Tap a column to drop a disc. Tap anywhere to skip an animation or a celebration. On a keyboard: the arrow keys and Space, or the keys 1 to 7, drop a disc; Enter presses the main button, H asks for a hint, U undoes and M mutes the sound.</p>
+    <button class="btn primary" data-close>Got it</button>
+  </div>
+</div>
+
+<div id="about" class="overlay" hidden>
+  <div class="dialog">
+    <h2>Connect Four</h2>
+    <p id="about-version"></p>
+    <p class="muted">If this is older than you expect, refresh the page. Browsers can hold on to the previous version for a few minutes after an update.</p>
+    <p><a href="https://github.com/menaechmus/ConnectFour" target="_blank" rel="noopener">Source on GitHub</a></p>
+    <button class="btn primary" data-close>Close</button>
+  </div>
+</div>
+
+<script type="module" src="js/ui.js"></script>
+</body>
+</html>
