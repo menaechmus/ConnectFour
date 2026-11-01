@@ -25,6 +25,8 @@
 // win scores higher. A draw is 0. Judged positions stay within JUDGED, so
 // anything beyond PROVED is certain.
 
+import { BOOK } from './book.js';
+
 export const CELLS = 42;
 const COLUMNS = 7;
 const WIN = 1000;
@@ -480,6 +482,29 @@ function winningReplies({ pLo, pHi, mLo, mHi, stones }, column) {
   return replies;
 }
 
+const BOOK_DISCS = 8; // the most discs on the board of any position in the book
+let bookMoves = null; // built on first use, from a string that is quick to load
+
+// The book's move in the position after `moves`, or null if it has none. Each
+// column is a number, a leading 1 and then its discs from the bottom up, 1 for
+// the second player's; seven of those make a position. The book holds the
+// smaller of a position and its mirror image, so a position found by its
+// mirror image plays the mirror image of the move.
+export function bookColumn(moves) {
+  if (moves.length > BOOK_DISCS) return null;
+  bookMoves ??= new Map(BOOK.split(',').map(entry => [entry.slice(0, -1), Number(entry.at(-1))]));
+  const codes = new Array(COLUMNS).fill(1);
+  moves.forEach((column, n) => {
+    codes[column] = codes[column] * 2 + (n & 1);
+  });
+  const number = list => list.reduce((key, code) => key * 128 + code, 0);
+  const key = number(codes);
+  const mirror = number(codes.reverse());
+  const column = bookMoves.get(Math.min(key, mirror).toString(36));
+  if (column === undefined) return null;
+  return key <= mirror ? column : COLUMNS - 1 - column;
+}
+
 // Thinks about the position after `moves`, the columns played so far.
 //
 // `depth`, `nodes` and `ms` limit it, and the tests use `nodes` so that the
@@ -506,8 +531,8 @@ export function think(moves, { depth = CELLS, nodes: budget = Infinity, ms = Inf
     if (wins.length) return says(wins[0], WIN - (stones + 1), { reason: 'win' });
     if (!safe.length) return says(blocks[0] ?? legal[0], -(WIN - (stones + 2)), { reason: 'lost' });
     if (safe.length === 1) return says(safe[0], 0, { solved: false, reason: blocks.length ? 'block' : 'only' });
-    if (book && stones === 0) return says(3, 0, { solved: false, reason: 'book' });
-    if (book && stones === 1 && moves[0] === 3) return says(3, 0, { solved: false, reason: 'book' });
+    const known = book ? bookColumn(moves) : null;
+    if (known !== null) return says(known, 0, { solved: false, reason: 'book' });
   }
 
   makeTable(bits);

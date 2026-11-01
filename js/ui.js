@@ -14,8 +14,8 @@ import { createHost, createGuest, cleanName, sameState, deniedText, MAX_PLAYERS,
 
 // Shown in the About box. Bump both with every release: a browser still
 // running a cached copy of this file then shows the old number.
-const VERSION = '1.1.0';
-const RELEASED = '31 October 2026';
+const VERSION = '1.2.0';
+const RELEASED = '1 November 2026';
 
 const AI_DELAY = 500; // the least time between a disc landing and the computer's reply
 const FALL_MS = 420; // a disc falling the whole height of the board

@@ -18,7 +18,8 @@ import {
   COLUMNS, ROWS, CELLS, TARGETS, other, emptyBoard, canDrop, openColumns, moverOf, boardOf, lineThrough,
   newMatch, nextGame, drop, canTakeBack, takeBack,
 } from './js/game.js';
-import { think, threatsOf, positionOf, PROVED } from './js/engine.js';
+import { think, threatsOf, positionOf, bookColumn, PROVED } from './js/engine.js';
+import { BOOK } from './js/book.js';
 import { LEVELS, chooseMove, hint, answer, seedOf } from './js/ai.js';
 import { ask, cancelThinking, startThinker } from './js/thinker.js';
 import { emptyStats, loadStats, recordGame } from './js/stats.js';
@@ -561,7 +562,79 @@ test('engine: a smaller table than asked for is kept between searches', () => {
 test('engine: plays the proved opening only from the book', () => {
   equal(think([], { book: true }).column, 3, 'the middle');
   equal(think([3], { book: true }).column, 3, 'and on top of it');
-  equal(think([0], { book: true, fresh: true, nodes: 2000 }).reason, 'search', 'no book elsewhere');
+  equal(think([0, 6, 0, 6], { book: true, fresh: true, nodes: 2000 }).reason, 'search', 'no book where Guru would never be');
+  equal(think([3], { fresh: true, nodes: 2000 }).reason, 'search', 'and none unless asked');
+});
+
+// Follows Guru through the book, trying every reply: `first` is whether it
+// moves first. Calls `found(moves, answer)` for each position it must answer.
+function walkBook(first, lastDisc, found) {
+  const seen = new Set();
+  const walk = moves => {
+    const key = moves.join('');
+    if (moves.length > lastDisc || seen.has(key)) return;
+    seen.add(key);
+    const board = boardOf(moves, 0);
+    if (moves.length % 2 === (first ? 0 : 1)) {
+      const answer = think(moves, { book: true, nodes: 1, fresh: false, seed: 1 });
+      found(moves, answer);
+      board[answer.column].push(moves.length % 2);
+      if (lineThrough(board, answer.column, board[answer.column].length - 1).length) return;
+      walk([...moves, answer.column]);
+    } else {
+      for (const column of openColumns(board)) {
+        board[column].push(moves.length % 2);
+        const won = lineThrough(board, column, board[column].length - 1).length > 0;
+        board[column].pop();
+        if (!won) walk([...moves, column]);
+      }
+    }
+  };
+  walk([]);
+  return seen.size;
+}
+
+test('book: moving first, every position to disc 8 has its answer ready', () => {
+  let answers = 0;
+  walkBook(true, 8, (moves, { reason, column }) => {
+    answers++;
+    equal(reason === 'search', false, `no answer after ${moves}`);
+    equal(canDrop(boardOf(moves, 0), column), true, `a legal column after ${moves}`);
+  });
+  equal(answers > 500, true, `${answers} positions`);
+  notes.push(`moving first, ${answers} positions answered from the book or at once`);
+});
+
+test('book: moving second, every position to disc 7 has its answer ready', () => {
+  let answers = 0;
+  walkBook(false, 7, (moves, { reason, column }) => {
+    answers++;
+    equal(reason === 'search', false, `no answer after ${moves}`);
+    equal(canDrop(boardOf(moves, 0), column), true, `a legal column after ${moves}`);
+  });
+  equal(answers > 500, true, `${answers} positions`);
+  notes.push(`moving second, ${answers} positions answered from the book or at once`);
+});
+
+test('book: a mirror-image position gets the mirror-image move', () => {
+  const mirrored = moves => moves.map(column => 6 - column);
+  let checked = 0;
+  walkBook(true, 6, moves => {
+    const column = bookColumn(moves);
+    if (column === null || moves.join('') === mirrored(moves).join('')) return;
+    equal(bookColumn(mirrored(moves)), 6 - column, `after ${moves}`);
+    checked++;
+  });
+  equal(checked > 50, true, `${checked} positions`);
+});
+
+test('book: a position reached by another move order gets the same move', () => {
+  equal(bookColumn([3, 3, 2, 1]), bookColumn([2, 3, 3, 1]), 'the same discs, in another order');
+});
+
+test('book: what the hint says, and that its size stays small', () => {
+  equal(hint({ moves: [3, 2] }).text.endsWith('is the best move here, from the opening book.'), true, 'in words');
+  equal(BOOK.length < 20000, true, `${BOOK.length} characters`);
 });
 
 test('engine: an empty board is not taken for an empty slot', () => {
@@ -836,7 +909,7 @@ await testAsync('worker: a question goes there and comes back', async () => {
 });
 
 await testAsync('worker: a cancelled question rejects, and the next is answered', async () => {
-  const asked = ask({ type: 'move', moves: [3, 2], level: 'guru', seed: 2, limit: { ms: 20000 } });
+  const asked = ask({ type: 'move', moves: [3, 2], level: 'guru', seed: 2, limit: { ms: 20000, book: false } });
   const waiting = ask({ type: 'move', moves: [3, 2, 1], level: 'hard', seed: 2 });
   await tick(50);
   cancelThinking();
@@ -851,7 +924,7 @@ await testAsync('worker: a cancelled question rejects, and the next is answered'
 await testAsync('worker: a long search is left to finish, and says how it goes', async () => {
   const heard = [];
   const started = performance.now();
-  const result = await ask({ type: 'move', moves: [3, 2], level: 'guru', seed: 5, limit: { ms: 9000 } }, note => heard.push(note));
+  const result = await ask({ type: 'move', moves: [3, 2], level: 'guru', seed: 5, limit: { ms: 9000, book: false } }, note => heard.push(note));
   const took = performance.now() - started;
   equal(took > 8500, true, `took ${Math.round(took)} ms`);
   equal('onPage' in result, false, 'on the worker');

@@ -41,11 +41,21 @@ Each person plays on their own phone, and one phone, the host's, keeps the match
 - **Easy** does not search. It looks one disc ahead and takes a win nine times in ten and blocks seven times in ten; otherwise it favours the places on the most possible lines.
 - **Medium**, **Hard** and **Guru** share one search, which differs only in how far it looks and how much noise is added to its scores. Noise blurs its judgement of quiet positions, but never a proved win or loss. Medium barely reads ahead and has plenty of noise: it never misses a win or a block, and never hands one over, but it doesn't plan. Hard reads 4 discs ahead with more noise, so it is sharp in a fight and can still be outplayed. Guru has no noise and 4 seconds a move by default, which reaches about 18 discs ahead early in a game on a PC, and further as the game goes on.
 - In self-play from random openings, Medium beats Easy 76% of the time, Hard beats Medium 83%, and Guru won all 40 of its games against Hard.
-- Connect Four is a solved game: with perfect play the first player wins by starting in the middle. Guru opens in the middle, and answers a middle opening on top of it, from a small book, then searches. Whenever a search reaches the end of every line the result is proved, and from then on its play is perfect. On a PC that usually happens around the eighth or ninth disc, and later on a slower device. Before that its choices are very strong but not proved, so it is unbeatable in practice rather than in theory. An expert who knows the openings could still find a way through while moving first.
+- Connect Four is a solved game: with perfect play the first player wins by starting in the middle. Guru plays its first moves from an opening book (see below), then searches. Whenever a search reaches the end of every line the result is proved, and from then on its play is perfect.
+- Moving first, Guru keeps its win all through the book, whatever the other side plays. In 63 whole games it won every one, against a full-strength Guru without the book, Hard, and an opponent making wild moves, trying every first reply. It had proved the result by the fourteenth disc at the latest. That is very strong evidence, not a guarantee: the few moves just after the book are still searched, and a slow device may not prove them in time.
+- Moving second, Guru cannot beat a first player who plays perfectly, as nobody can. It holds on to whatever a first player's mistakes give it.
 - When Guru has only losing moves, it holds out for as long as it can, and among the moves that last about as long it picks the one leaving the fewest winning replies.
 - The same position in the same game gets the same reply, so Undo cannot be used to fish for a mistake.
 
 The computer thinks in a Web Worker, so the page stays smooth. If a worker cannot start, or stops answering, the page thinks for itself on a shorter budget.
+
+### The opening book
+
+`js/book.js` holds the best move in every position Guru can reach by keeping to it, whatever the other side plays: 1,292 positions up to eight discs. Hints use it too. Up to seven discs it comes from John Tromp's table of solved 8-disc positions, which took about 40,000 hours of computing:
+
+> Tromp, J. (1995). Connect-4 [Dataset]. UCI Machine Learning Repository. <https://doi.org/10.24432/C59P43>, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+
+The table holds each position's result. This game works the best moves out from those results, and adds moves at eight discs when moving first, each a win proved by its own search. Working back from the table gives the known result of the empty board and of all seven first moves. Scored against it, without the book Guru threw away a win in 2 of the 4 positions after its first move, and all 851 positions tested with the book kept their result.
 
 ### Advanced
 
@@ -89,6 +99,7 @@ Before pushing a change, raise `VERSION` and `RELEASED` at the top of `js/ui.js`
 | `js/game.js` | The rules: the board, turns, wins, draws, take-backs and the match, as a plain match object and the actions that change it |
 | `js/board.js` | Board geometry: where each cell sits, and the shapes of the plate and its holes |
 | `js/engine.js` | The search: positions as bits, threats, the table of positions seen, and choosing a move |
+| `js/book.js` | Guru's opening book |
 | `js/ai.js` | The computer's four levels and its hints |
 | `js/worker.js`, `js/thinker.js` | The computer's thinking off the page's thread, and the page's side of that |
 | `js/stats.js` | Lifetime statistics |

@@ -90,7 +90,7 @@ export function hint({ moves, seed = 1, limit = null, fresh = false }) {
   if (reason === 'block') return { column, text: `${capital} blocks a win for the other side.` };
   if (reason === 'lost') return { column, text: `They have two ways to win now. ${capital} blocks one and hopes.` };
   if (reason === 'only') return { column, text: `${capital} is the only move that doesn't hand over the game.` };
-  if (reason === 'book') return { column, text: `${capital}: the middle is the strongest place to play.` };
+  if (reason === 'book') return { column, text: `${capital} is the best move here, from the opening book.` };
   if (solved && score >= PROVED) return { column, text: `${capital} leads to a forced win, if you keep finding the moves.` };
   if (solved && score <= -PROVED) return { column, text: `Every move loses against perfect play. ${capital} holds out longest.` };
   if (solved) return { column, text: `${capital} holds the draw.` };
