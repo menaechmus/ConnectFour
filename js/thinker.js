@@ -1,9 +1,12 @@
 // The page's side of worker.js: questions go to the worker, and answers come
 // back as promises. A worker busy searching can't read a message, so a question
 // nobody wants any more is dropped by ending the worker, and a new one starts
-// for the next question. If a worker can't start, or dies, or goes silent, the
-// page answers with the same code on a short budget instead: a slightly weaker
-// move, and a moment's stall, but the game goes on.
+// for the next question. If a worker can't start, or goes silent, the page
+// answers with the same code on a short budget instead: a weaker move, and a
+// moment's stall, but the game goes on. Such an answer says `onPage`.
+//
+// A search can take minutes, so it isn't timed. It reports several times a
+// second, and only silence counts against it.
 //
 // With ?think=here in the address the page always answers itself, on a small
 // fixed budget: the test driver's simulated clock doesn't wait for workers.
@@ -16,7 +19,8 @@ const mode = params.get('think');
 const HERE_LIMIT = { nodes: 20000 }; // the driver's budget: the same answer every run
 const FALLBACK_LIMIT = { ms: 400 }; // a real page, doing without a worker
 const PAINT_MS = 30; // lets "thinking" reach the screen before the page stalls
-const SILENCE_MS = 7000; // longer than any question's budget, so a worker this quiet has died
+const SILENCE_MS = 7000; // a search reports far more often, so a worker this quiet has died
+const SECOND_CHANCE_MS = 2000; // a phone waking up can run this timer before the worker's messages
 
 let worker = null;
 let broken = mode === 'here' || mode === 'broken'; // no point trying to start one
@@ -29,7 +33,7 @@ function thinkHere(request) {
   return new Promise((resolve, reject) => {
     setTimeout(() => {
       try {
-        resolve(answer({ ...request, limit }));
+        resolve({ ...answer({ ...request, limit }), onPage: true });
       } catch (error) {
         reject(error);
       }
@@ -42,7 +46,7 @@ function endWorker() {
   worker = null;
 }
 
-// Gives up on the worker for the rest of this page, and answers what's left here.
+// Gives up on workers for the rest of this page, and answers what's left here.
 function giveUp() {
   endWorker();
   broken = true;
@@ -54,6 +58,28 @@ function giveUp() {
   }
 }
 
+// This worker has stopped answering: the page takes this question, and the
+// next one gets a new worker.
+function abandon() {
+  const { request, resolve, reject } = job;
+  job = null;
+  endWorker();
+  thinkHere(request).then(resolve, reject);
+  nextJob();
+}
+
+// Waits to hear from the worker on `current`, and hears nothing twice before
+// abandoning it. A hidden page may just be asleep, so it waits on.
+function listen(current, wait = SILENCE_MS) {
+  clearTimeout(current.silence);
+  current.silence = setTimeout(() => {
+    if (current !== job) return;
+    if (document.hidden) listen(current);
+    else if (wait === SILENCE_MS) listen(current, SECOND_CHANCE_MS);
+    else abandon();
+  }, wait);
+}
+
 function startWorker() {
   try {
     worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
@@ -63,6 +89,11 @@ function startWorker() {
   }
   worker.onmessage = ({ data }) => {
     if (data.id !== job?.id) return;
+    if ('progress' in data) {
+      listen(job);
+      job.onProgress?.(data.progress);
+      return;
+    }
     const { resolve, reject, silence } = job;
     clearTimeout(silence);
     job = null;
@@ -82,7 +113,7 @@ function nextJob() {
   }
   job = waiting.shift();
   job.id = nextId++;
-  job.silence = setTimeout(giveUp, SILENCE_MS);
+  listen(job);
   worker.postMessage({ id: job.id, request: job.request });
 }
 
@@ -91,11 +122,12 @@ export function startThinker() {
   if (!broken && !worker) startWorker();
 }
 
-// Answers `request`, as answer() in ai.js takes them.
-export function ask(request) {
+// Answers `request`, as answer() in ai.js takes them. `onProgress` hears how
+// a search is going, if a worker is doing it.
+export function ask(request, onProgress = null) {
   if (broken) return thinkHere(request);
   return new Promise((resolve, reject) => {
-    waiting.push({ request, resolve, reject });
+    waiting.push({ request, resolve, reject, onProgress });
     nextJob();
   });
 }

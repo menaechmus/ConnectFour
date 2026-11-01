@@ -17,7 +17,7 @@ export const LEVELS = {
   easy: { takeWin: 0.9, block: 0.7 },
   medium: { depth: 1, noise: 50 },
   hard: { depth: 4, noise: 60 },
-  guru: { ms: 3000, book: true, defend: true },
+  guru: { ms: 4000, book: true, defend: true },
 };
 
 // Hints use the search with a short budget, and the book, but no noise: a hint
@@ -70,11 +70,12 @@ function easyMove(moves, { takeWin, block }, random) {
 
 // The move for `level`, as { column }. `limit` is { ms } or { nodes } to use
 // in place of the level's own, and `seed` a number that stays the same all
-// game: a position answered once is answered the same way again.
-export function chooseMove({ moves, level, seed = 1, limit = null, fresh = false }) {
+// game: a position answered once is answered the same way again. `progress`
+// hears how a search is going (see think() in engine.js).
+export function chooseMove({ moves, level, seed = 1, limit = null, fresh = false }, progress = null) {
   const settings = LEVELS[level];
   if (level === 'easy') return { column: easyMove(moves, settings, rngOf(Math.imul(seed, 53) + moves.length)) };
-  return think(moves, { ...settings, ...(limit ?? {}), seed, fresh });
+  return think(moves, { ...settings, ...(limit ?? {}), seed, fresh, progress });
 }
 
 const columnName = column => `column ${column + 1}`;
@@ -97,7 +98,7 @@ export function hint({ moves, seed = 1, limit = null, fresh = false }) {
 }
 
 // One question from the page, as thinker.js sends them: { type: 'move' | 'hint', ... }.
-export const answer = request => (request.type === 'hint' ? hint(request) : chooseMove(request));
+export const answer = (request, progress = null) => (request.type === 'hint' ? hint(request) : chooseMove(request, progress));
 
 // A number for the game in hand, the same all game and through a reload.
 export function seedOf(match) {

@@ -39,13 +39,29 @@ Each person plays on their own phone, and one phone, the host's, keeps the match
 ## The computer
 
 - **Easy** does not search. It looks one disc ahead and takes a win nine times in ten and blocks seven times in ten; otherwise it favours the places on the most possible lines.
-- **Medium**, **Hard** and **Guru** share one search, which differs only in how far it looks and how much noise is added to its scores. Noise blurs its judgement of quiet positions, but never a proved win or loss. Medium barely reads ahead and has plenty of noise: it never misses a win or a block, and never hands one over, but it doesn't plan. Hard reads 4 discs ahead with more noise, so it is sharp in a fight and can still be outplayed. Guru has no noise and 3 seconds a move, which reaches 20 to 26 discs ahead on a PC.
+- **Medium**, **Hard** and **Guru** share one search, which differs only in how far it looks and how much noise is added to its scores. Noise blurs its judgement of quiet positions, but never a proved win or loss. Medium barely reads ahead and has plenty of noise: it never misses a win or a block, and never hands one over, but it doesn't plan. Hard reads 4 discs ahead with more noise, so it is sharp in a fight and can still be outplayed. Guru has no noise and 4 seconds a move by default, which reaches about 18 discs ahead early in a game on a PC, and further as the game goes on.
 - In self-play from random openings, Medium beats Easy 76% of the time, Hard beats Medium 83%, and Guru won all 40 of its games against Hard.
 - Connect Four is a solved game: with perfect play the first player wins by starting in the middle. Guru opens in the middle, and answers a middle opening on top of it, from a small book, then searches. Whenever a search reaches the end of every line the result is proved, and from then on its play is perfect. On a PC that usually happens around the eighth or ninth disc, and later on a slower device. Before that its choices are very strong but not proved, so it is unbeatable in practice rather than in theory. An expert who knows the openings could still find a way through while moving first.
 - When Guru has only losing moves, it holds out for as long as it can, and among the moves that last about as long it picks the one leaving the fewest winning replies.
 - The same position in the same game gets the same reply, so Undo cannot be used to fish for a mistake.
 
 The computer thinks in a Web Worker, so the page stays smooth. If a worker cannot start, or stops answering, the page thinks for itself on a shorter budget.
+
+### Advanced
+
+The gear on the menu, shown when playing the computer, opens **Advanced**. It sets how Guru thinks: for 4 seconds a move (the default), 10 or 30 seconds, or 1 or 2 minutes, or to a chosen number of discs ahead, from 1 to 42. Asked for a distance, it stops at 2 minutes if it hasn't got there, and says so. Settings apply from Guru's next move, and the other levels are not affected. The box also shows what the computer did for its last move and over the game: positions calculated, lookahead, time, speed, memory, and whether the result is proved. Long thinks show their progress and keep the screen on.
+
+How far Guru sees early in a game, measured on a PC with little else running. A busy PC or a slower device sees a disc or two fewer:
+
+| Thinking time | Discs ahead |
+|---|---|
+| 4 seconds | 18 |
+| 10 seconds | 20 |
+| 30 seconds | 23 to 24 |
+| 1 minute | 26 |
+| 2 minutes | 26 |
+
+Guru stops sooner when it proves the result, and a slower device sees less far in the same time. It keeps up to 50 MB of positions it has already worked out. That made no difference at 4 or 10 seconds compared with 25 MB, and added up to one disc at 1 minute. A game against Guru counts the same in **Statistics** whatever it is set to.
 
 ## Run locally
 

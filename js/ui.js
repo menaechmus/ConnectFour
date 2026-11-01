@@ -4,7 +4,7 @@
 
 import { COLUMNS, ROWS, other, canDrop, newMatch, nextGame, drop, canTakeBack, takeBack, emptyBoard } from './game.js';
 import { BOARD, CELL, DISC, AIR, DROP_Y, LABEL_Y, BELOW_Y, columnX, cellXY, columnBox, plateShape, holeRims, backShape } from './board.js';
-import { seedOf } from './ai.js';
+import { LEVELS, seedOf } from './ai.js';
 import { ask, cancelThinking, startThinker } from './thinker.js';
 import { emptyStats, loadStats, recordGame } from './stats.js';
 import { playSound, setMuted, unlockSound } from './sound.js';
@@ -14,7 +14,7 @@ import { createHost, createGuest, cleanName, sameState, deniedText, MAX_PLAYERS,
 
 // Shown in the About box. Bump both with every release: a browser still
 // running a cached copy of this file then shows the old number.
-const VERSION = '1.0.0';
+const VERSION = '1.1.0';
 const RELEASED = '31 October 2026';
 
 const AI_DELAY = 500; // the least time between a disc landing and the computer's reply
@@ -25,6 +25,9 @@ const HOLD_MS = 500; // a full board sits this long before Next game
 const CLEAR_MS = 380; // the discs falling out at the start of a game
 const LIFT_MS = 170; // a disc taken back rising out of its column
 const CHEER_MS = 3500; // fireworks and confetti before the box appears
+const MAX_THINK_MS = 120000; // Guru's longest think, however far it has been asked to look
+const MOST_DISCS = 42; // as far as anyone can ask it to look
+const QUIET_MS = 1000; // a think shorter than this doesn't need its progress shown
 const SETTINGS_KEY = 'connectfour.settings';
 const GAME_KEY = 'connectfour.game';
 const STATS_KEY = 'connectfour.stats';
@@ -64,9 +67,14 @@ function parseValue(text) {
   return /^\d+$/.test(text) ? Number(text) : text;
 }
 
+const clampDiscs = discs => Math.min(MOST_DISCS, Math.max(1, discs));
+
 // Saved settings are only accepted if the menu offers that value.
 function loadSettings() {
-  const settings = { mode: 'ai', difficulty: 'medium', first: 'turns', names: ['', ''], wifiName: '', target: 1, hints: true, undo: true, sound: true, lastStarter: 1 };
+  const settings = {
+    mode: 'ai', difficulty: 'medium', first: 'turns', names: ['', ''], wifiName: '', target: 1, hints: true, undo: true, sound: true, lastStarter: 1,
+    guruBy: 'time', guruMs: LEVELS.guru.ms, guruDepth: 20,
+  };
   const saved = load(SETTINGS_KEY);
   for (const group of document.querySelectorAll('.choice[data-setting]')) {
     const key = group.dataset.setting;
@@ -78,6 +86,7 @@ function loadSettings() {
   }
   if (typeof saved?.wifiName === 'string') settings.wifiName = saved.wifiName.slice(0, NAME_LENGTH);
   if (saved?.lastStarter === 0 || saved?.lastStarter === 1) settings.lastStarter = saved.lastStarter;
+  if (Number.isInteger(saved?.guruDepth)) settings.guruDepth = clampDiscs(saved.guruDepth);
   return settings;
 }
 
@@ -101,6 +110,10 @@ let confirmed = null; // what the confirm box's button does
 let aiTimer = 0;
 let thinking = 0; // the computer's question in hand, as a number; 0 when there is none
 let questions = 0;
+let searching = null; // how the computer's search is going: { nodes, depth, ms }
+let holdingAwake = false; // the screen stays on for a search that may take a while
+let lastSearch = null; // what the computer did for its last move, for the Advanced box
+let gameSearches = null; // and all its moves this game: { key, moves, nodes, deepest, longest }
 let standing = false; // the host has asked the computer to play for the other phone
 let undoStats = null; // the statistics, as text, from before the game just finished
 // A Wi-Fi game (see the section of that name below).
@@ -153,6 +166,14 @@ function standIn() {
 }
 
 const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// Guru's limit, as the worker takes it and in a few words. Asked to look a
+// given distance it still stops at MAX_THINK_MS, as the work grows with every
+// disc and the distance could otherwise take hours.
+const guruLimit = () => (settings.guruBy === 'depth' ? { depth: settings.guruDepth, ms: MAX_THINK_MS } : { ms: settings.guruMs });
+const timeWords = ms => (ms < 60000 ? `${Math.round(ms / 100) / 10} s` : `${Math.round(ms / 6000) / 10} min`);
+const guruWords = () => (settings.guruBy === 'depth' ? `${settings.guruDepth} discs` : timeWords(settings.guruMs));
+const levelNote = ({ level }) => (level === 'guru' ? `Guru, ${guruWords()}` : capital(level));
 
 // Tells one position from the next, to spot an answer that came too late.
 const stamp = () => `${match.id}:${match.gameNo}:${match.moves.length}`;
@@ -274,7 +295,7 @@ function render() {
   [0, 1].forEach(side => {
     const box = document.querySelector(`.score[data-side="${side}"]`);
     box.querySelector('.name').textContent = nameOf(side);
-    box.querySelector('.note').textContent = match.players[side].ai ? capital(match.players[side].level) : '';
+    box.querySelector('.note').textContent = match.players[side].ai ? levelNote(match.players[side]) : '';
     box.querySelector('.points').textContent = match.target > 1 ? score[side] : '';
     box.classList.toggle('active', now === side);
     // A Wi-Fi player whose phone is out of touch is dimmed; on a guest's
@@ -338,8 +359,17 @@ function promptText() {
   if (match.phase === 'between') return [gameText(), false];
   const side = actor();
   if (side === null) return ['', false];
-  if (isAi(side)) return [`${nameOf(side)} is thinking…`, false];
+  if (isAi(side)) return [thinkingText(side), false];
   return [`${whose(side)} turn. Tap a column to drop a disc.`, false];
+}
+
+// A long think shows how far it has got, so that it doesn't look stuck.
+function thinkingText(side) {
+  const text = `${nameOf(side)} is thinking…`;
+  if (match.players[side].level !== 'guru' || !searching || searching.ms < QUIET_MS) return text;
+  const seconds = Math.floor(searching.ms / 1000);
+  if (settings.guruBy === 'depth') return `${text} ${seconds} s, ${searching.depth} of ${settings.guruDepth} discs ahead`;
+  return `${text} ${seconds} s of ${settings.guruMs / 1000}, ${searching.depth} discs ahead`;
 }
 
 // The main button is only there when there is something to press: on the
@@ -413,6 +443,65 @@ function statsHtml() {
         : '<p>No games finished yet.</p>'
     }
     <p class="muted">Finished games are saved in this browser, on this device.</p>`;
+}
+
+const WHY_NO_SEARCH = {
+  win: 'it had a winning move',
+  block: 'it had to block',
+  only: 'only one move was safe',
+  lost: 'it had already lost',
+  book: 'it played from its opening book',
+  failed: 'the search failed, so it played any open column',
+};
+
+function lastMoveHtml() {
+  if (!lastSearch) return '<p class="muted">Nothing yet. Play the computer, and what it did for its last move shows here.</p>';
+  const { level, reason, nodes, depth, ms, memory, solved, score, target, onPage } = lastSearch;
+  if (level === 'easy') return '<p class="muted">Easy does no searching: it only looks one disc ahead.</p>';
+  if (reason !== 'search') return `<p class="muted">No search was needed: ${WHY_NO_SEARCH[reason]}.</p>`;
+  const lookahead = target && !solved && depth < target ? `reached ${depth} of ${target}, stopped at ${timeWords(ms)}` : `${depth} discs`;
+  const speed = ms ? `${(nodes / ms / 1000).toFixed(1)} million/s` : '–';
+  const result = !solved ? 'Not proved yet' : score > 0 ? 'Proved: it wins' : score < 0 ? 'Proved: it loses' : 'Proved: a draw';
+  return `
+    <dl class="facts">
+      <dt>Level</dt><dd>${capital(level)}</dd>
+      <dt>Positions calculated</dt><dd>${nodes.toLocaleString('en')}</dd>
+      <dt>Lookahead</dt><dd>${lookahead}</dd>
+      <dt>Time</dt><dd>${(ms / 1000).toFixed(1)} s</dd>
+      <dt>Speed</dt><dd>${speed}</dd>
+      <dt>Memory</dt><dd>${memory} MB</dd>
+      <dt>Result</dt><dd>${result}</dd>
+    </dl>
+    ${onPage ? '<p class="muted">This move ran on the page with a short limit, because the background worker was not available.</p>' : ''}`;
+}
+
+function advancedHtml() {
+  const game = gameSearches;
+  const totals = game?.moves
+    ? `<dl class="facts">
+        <dt>Moves searched</dt><dd>${game.moves}</dd>
+        <dt>Positions calculated</dt><dd>${game.nodes.toLocaleString('en')}</dd>
+        <dt>Deepest lookahead</dt><dd>${game.deepest} discs</dd>
+        <dt>Longest think</dt><dd>${(game.longest / 1000).toFixed(1)} s</dd>
+      </dl>`
+    : '<p class="muted">No searches yet this game.</p>';
+  return `<h3>Last move</h3>${lastMoveHtml()}<h3>This game</h3>${totals}`;
+}
+
+function drawAdvanced() {
+  const byTime = settings.guruBy === 'time';
+  $('row-guru-time').hidden = !byTime;
+  $('row-guru-depth').hidden = byTime;
+  $('guru-depth').value = settings.guruDepth;
+  $('guru-note').textContent = byTime
+    ? 'Guru stops sooner if it proves the result. A slower device looks less far in the same time.'
+    : `Guru takes as long as it needs, up to ${timeWords(MAX_THINK_MS)}. Each extra disc takes longer than the last, and a slower device may not get there.`;
+  $('advanced-stats').innerHTML = advancedHtml();
+}
+
+function showAdvanced() {
+  drawAdvanced();
+  $('advanced').hidden = false;
 }
 
 // ---- Animation ----------------------------------------------------------
@@ -681,28 +770,57 @@ function scheduleAi() {
   if (side === null || !isAi(side)) return;
   const question = ++questions;
   const asked = performance.now();
+  const { level } = match.players[side];
+  const limit = level === 'guru' ? guruLimit() : null;
   thinking = question;
+  holdingAwake = level === 'guru';
+  keepAwake(awakeWanted());
   render();
-  const answered = ({ column }) => {
+  const answered = result => {
     if (thinking !== question) return;
+    noteSearch(level, result, limit);
     aiTimer = setTimeout(() => {
       if (thinking !== question) return;
-      thinking = 0;
-      commit(() => drop(match, side, column));
+      endThinking();
+      commit(() => drop(match, side, result.column));
     }, Math.max(0, AI_DELAY - (performance.now() - asked)));
   };
-  ask({ type: 'move', moves: match.moves, level: match.players[side].level, seed: seedOf(match) }).then(answered, () => {
+  const heard = progress => {
+    if (thinking !== question) return;
+    searching = progress;
+    if (!show && !tip) $('prompt').textContent = thinkingText(side);
+  };
+  ask({ type: 'move', moves: match.moves, level, seed: seedOf(match), limit }, heard).then(answered, () => {
     // A cancelled question has been replaced. Anything else is a failed
     // search, and the game must go on: any open column will do.
     if (thinking === question) answered({ column: match.board.findIndex((discs, column) => canDrop(match.board, column)) });
   });
 }
 
+function endThinking() {
+  thinking = 0;
+  searching = null;
+  holdingAwake = false;
+  keepAwake(awakeWanted());
+}
+
 function stopAi() {
   clearTimeout(aiTimer);
   if (!thinking) return;
-  thinking = 0;
+  endThinking();
   cancelThinking();
+}
+
+// Remembers what the computer did, for the Advanced box.
+function noteSearch(level, result, limit) {
+  lastSearch = { level, target: limit?.depth ?? 0, reason: 'failed', ...result };
+  const key = `${match.id}:${match.gameNo}`;
+  if (gameSearches?.key !== key) gameSearches = { key, moves: 0, nodes: 0, deepest: 0, longest: 0 };
+  if (!result.nodes) return;
+  gameSearches.moves++;
+  gameSearches.nodes += result.nodes;
+  gameSearches.deepest = Math.max(gameSearches.deepest, result.depth);
+  gameSearches.longest = Math.max(gameSearches.longest, result.ms);
 }
 
 // A move by the person who must act here: run here, or on a guest's phone in
@@ -839,8 +957,10 @@ function alertTurn(before) {
 }
 
 // The screen stays on while this phone is in a Wi-Fi game, as a phone that
-// sleeps drops out. The browser lets the lock go whenever the page is
-// hidden, so it is asked for again each time the page comes back.
+// sleeps drops out, and while Guru thinks, as a phone that sleeps stops it.
+// The browser lets the lock go whenever the page is hidden, so it is asked for
+// again each time the page comes back.
+const awakeWanted = () => Boolean(session) || holdingAwake;
 let wakeLock = null;
 let askingLock = false;
 async function keepAwake(on) {
@@ -854,7 +974,7 @@ async function keepAwake(on) {
   askingLock = true;
   try {
     const lock = await navigator.wakeLock.request('screen');
-    if (session) {
+    if (awakeWanted()) {
       wakeLock = lock;
       lock.addEventListener('release', () => {
         if (wakeLock === lock) wakeLock = null;
@@ -866,7 +986,7 @@ async function keepAwake(on) {
   askingLock = false;
 }
 
-document.addEventListener('visibilitychange', () => keepAwake(Boolean(session)));
+document.addEventListener('visibilitychange', () => keepAwake(awakeWanted()));
 
 // Hosting and joining need a name, which the other phone sees.
 function needName() {
@@ -1337,6 +1457,7 @@ function showMenu() {
   $('row-difficulty').hidden = mode !== 'ai';
   $('row-first').hidden = mode !== 'ai';
   $('row-undo').hidden = mode !== 'ai';
+  $('btn-advanced').hidden = mode !== 'ai';
   $('row-names').hidden = mode !== 'local';
   $('row-wifi-name').hidden = mode !== 'net';
   $('row-wifi').hidden = mode !== 'net';
@@ -1398,7 +1519,7 @@ function start(saved = null, fresh = !saved) {
   drawBoard();
   $('menu').hidden = true;
   $('table').hidden = false;
-  keepAwake(Boolean(session));
+  keepAwake(awakeWanted());
   if (fresh) {
     settle({ ...snapshot(), actor: null, ...(replaced ? { board: replaced } : {}) }); // a new match: whoever starts is told it is their turn
     return;
@@ -1425,13 +1546,24 @@ function showStats() {
 
 // ---- Wiring -------------------------------------------------------------
 
-$('menu').addEventListener('click', event => {
-  const button = event.target.closest('.choice button');
-  if (!button) return;
-  settings[button.parentElement.dataset.setting] = parseValue(button.dataset.value);
+for (const place of [$('menu'), $('advanced')]) {
+  place.addEventListener('click', event => {
+    const button = event.target.closest('.choice button');
+    if (!button) return;
+    settings[button.parentElement.dataset.setting] = parseValue(button.dataset.value);
+    store(SETTINGS_KEY, settings);
+    setMuted(!settings.sound);
+    showMenu();
+    if (!$('advanced').hidden) drawAdvanced();
+  });
+}
+
+// Anything can be typed, so it is put right when the field is left.
+$('guru-depth').addEventListener('change', event => {
+  const typed = Number.parseInt(event.target.value, 10);
+  settings.guruDepth = Number.isNaN(typed) ? settings.guruDepth : clampDiscs(typed);
   store(SETTINGS_KEY, settings);
-  setMuted(!settings.sound);
-  showMenu();
+  drawAdvanced();
 });
 
 for (const field of document.querySelectorAll('[data-name]')) {
@@ -1484,6 +1616,7 @@ $('about-version').textContent = `Version ${VERSION} · ${RELEASED}`;
 $('btn-about').addEventListener('click', () => {
   $('about').hidden = false;
 });
+$('btn-advanced').addEventListener('click', showAdvanced);
 $('btn-menu').addEventListener('click', showMenu);
 $('btn-main').addEventListener('click', onMain);
 $('btn-undo').addEventListener('click', onUndo);
@@ -1599,7 +1732,7 @@ document.addEventListener('keydown', event => {
       cancelWifi();
       return;
     }
-    const open = ['rules', 'stats', 'about', 'confirm'].filter(id => !$(id).hidden);
+    const open = ['rules', 'stats', 'about', 'confirm', 'advanced'].filter(id => !$(id).hidden);
     for (const id of open) $(id).hidden = true;
     if (!open.length && match && !$('table').hidden && cursor !== null) {
       cursor = null;
@@ -1608,7 +1741,7 @@ document.addEventListener('keydown', event => {
     return;
   }
   if (event.target.matches?.('input')) return;
-  const busy = !match || $('table').hidden || !$('rules').hidden || !$('stats').hidden || !$('confirm').hidden || !$('about').hidden;
+  const busy = !match || $('table').hidden || !$('rules').hidden || !$('stats').hidden || !$('confirm').hidden || !$('about').hidden || !$('advanced').hidden;
   if (busy || event.ctrlKey || event.metaKey || event.altKey) return;
   const key = event.key.toLowerCase();
   if (event.key === 'Enter' && event.target !== $('btn-menu')) {

@@ -258,6 +258,27 @@ button {
   font-weight: 600;
 }
 
+/* A setting over its own row of choices, each as wide as the row allows. */
+.option.stacked {
+  display: grid;
+  gap: 4px;
+}
+
+.option.stacked .choice button { flex: 1; }
+
+.depth-field {
+  flex: none;
+  width: 5em;
+  min-height: 40px;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--ink);
+  font: inherit;
+  text-align: center;
+}
+
 /* The on-and-off settings share rows, so the menu fits a phone without scrolling. */
 .switches {
   display: flex;
@@ -639,6 +660,26 @@ button {
   stroke: currentColor;
   stroke-linecap: round;
   stroke-width: 2;
+}
+
+/* The gear: a thick ring broken into eight teeth. */
+.icon-btn svg .teeth {
+  fill: none;
+  stroke: currentColor;
+  stroke-dasharray: 3.53 3.54;
+  stroke-width: 3;
+}
+
+/* The menu's last row has four buttons against the computer. */
+@media (max-width: 359px) {
+  .menu-actions .row { gap: 6px; }
+
+  .menu-actions .row .btn {
+    padding-inline: 4px;
+    font-size: 0.9rem;
+  }
+
+  .menu-actions .row .icon-btn { width: 42px; }
 }
 
 /* The speaker shows sound waves when on and a cross when muted. */

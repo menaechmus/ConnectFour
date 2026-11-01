@@ -165,19 +165,22 @@ const EXACT = 1;
 const LOWER = 2;
 const UPPER = 3;
 const NO_MOVE = 7;
-const BITS = 21; // about 25 MB
+const BITS = 22; // about 50 MB
 const KEEP_FROM_DEPTH = 2;
 
 let table = null;
-let tableBits = 0;
+let tableBits = 0; // the size it has
+let tableAsked = 0; // and the size it was asked for, which can be more
 let tableSeed = 0;
 let age = 0;
 
 // Allocated on first use, so that a game against Easy never pays for it. A
-// phone short of memory gets a smaller table rather than an error.
+// phone short of memory gets a smaller table rather than an error, and keeps
+// it: asking again would only empty it.
 function makeTable(bits) {
-  if (table && tableBits === bits) return;
+  if (table && tableAsked === bits) return;
   table = null;
+  tableAsked = bits;
   for (let tried = bits; ; tried--) {
     try {
       table = new Int32Array(3 << tried);
@@ -219,6 +222,7 @@ function remember(keyLo, keyHi, value, bound, depth, move) {
 
 const STOP = new Error('out of time');
 const CHECK_EVERY = 1024;
+const REPORT_MS = 250;
 
 let nodes = 0;
 let nodeLimit = Infinity;
@@ -226,11 +230,21 @@ let timeLimit = Infinity;
 let checkAt = CHECK_EVERY;
 let cut = false; // this search stopped at a judged position, so it proves nothing
 let jitter = 0;
+let deepest = 0; // how many discs ahead the last whole round of the search looked
+let startedAt = 0;
+let report = null; // who hears how the search is going
+let reportAt = 0;
 
 // A running search can't be told anything, so it looks at the clock itself.
+// It can tell, though, and that also shows the page it is still alive.
 function checkBudget() {
   checkAt = nodes + CHECK_EVERY;
-  if (nodes >= nodeLimit || performance.now() >= timeLimit) throw STOP;
+  const now = performance.now();
+  if (nodes >= nodeLimit || now >= timeLimit) throw STOP;
+  if (report && now >= reportAt) {
+    reportAt = now + REPORT_MS;
+    report({ nodes, depth: deepest, ms: Math.round(now - startedAt) });
+  }
 }
 
 // How good the position looks, for a search out of depth. A line that needs
@@ -474,18 +488,19 @@ function winningReplies({ pLo, pHi, mLo, mHi, stones }, column) {
 // randomness. `book` plays the known best opening without thinking. `defend`
 // makes a side that has lost pick its most awkward defence, and `all` asks for
 // every move's exact score. `fresh` empties the table first, so that two runs
-// are the same.
+// are the same. `progress` hears { nodes, depth, ms } a few times a second.
 //
-// The answer is { column, score, depth, solved, nodes, values }: `values`
-// holds each column's score, or null where it was not looked at, and `solved`
-// says that the score is proved.
-export function think(moves, { depth = CELLS, nodes: budget = Infinity, ms = Infinity, noise = 0, seed = 1, book = false, defend = false, all = false, fresh = false, bits = BITS } = {}) {
+// The answer is { column, score, depth, solved, nodes, values, ms, memory }:
+// `values` holds each column's score, or null where it was not looked at,
+// `solved` says that the score is proved, `ms` is the time it took, and
+// `memory` is the table's size in MB.
+export function think(moves, { depth = CELLS, nodes: budget = Infinity, ms = Infinity, noise = 0, seed = 1, book = false, defend = false, all = false, fresh = false, bits = BITS, progress = null } = {}) {
   const root = positionOf(moves);
   const { pLo, pHi, mLo, mHi, stones } = root;
   const random = rngOf(Math.imul(seed, 31) + stones);
   const { legal, wins, blocks, safe } = survey(root);
   const values = new Array(COLUMNS).fill(null);
-  const says = (column, score, more = {}) => ({ column, score, depth: 0, solved: true, nodes: 0, values, ...more });
+  const says = (column, score, more = {}) => ({ column, score, depth: 0, solved: true, nodes: 0, values, ms: 0, memory: 0, ...more });
 
   if (!all) {
     if (wins.length) return says(wins[0], WIN - (stones + 1), { reason: 'win' });
@@ -504,8 +519,12 @@ export function think(moves, { depth = CELLS, nodes: budget = Infinity, ms = Inf
   age = (age + 1) & 255;
   jitter = Math.imul(seed, 0x2545f491);
   nodes = 0;
+  deepest = 0;
   nodeLimit = budget;
-  timeLimit = ms === Infinity ? Infinity : performance.now() + ms;
+  startedAt = performance.now();
+  timeLimit = startedAt + ms;
+  report = progress;
+  reportAt = startedAt + REPORT_MS;
   checkAt = CHECK_EVERY;
 
   // Scoring every move means a full window for each, which is what `noise`
@@ -530,7 +549,6 @@ export function think(moves, { depth = CELLS, nodes: budget = Infinity, ms = Inf
 
   let bestColumn = order[0];
   let bestScore = -INFINITE;
-  let reached = 0;
   let solved = false;
   const limit = Math.min(depth, CELLS - stones);
   try {
@@ -558,7 +576,7 @@ export function think(moves, { depth = CELLS, nodes: budget = Infinity, ms = Inf
         if (value > alpha) alpha = value;
         if (!everyMove && value >= PROVED) break;
       }
-      reached = d;
+      deepest = d;
       order = [topColumn, ...order.filter(column => column !== topColumn).sort((a, b) => (values[b] ?? -INFINITE) - (values[a] ?? -INFINITE))];
       solved = !cut || (!all && Math.abs(top) >= PROVED);
       if (solved) break;
@@ -601,5 +619,15 @@ export function think(moves, { depth = CELLS, nodes: budget = Infinity, ms = Inf
   }
 
   const mirror = mirrored && bestColumn !== 3 && random() < 0.5;
-  return { column: mirror ? 6 - bestColumn : bestColumn, score: bestScore === -INFINITE ? 0 : bestScore, depth: reached, solved, nodes, values, reason: 'search' };
+  return {
+    column: mirror ? 6 - bestColumn : bestColumn,
+    score: bestScore === -INFINITE ? 0 : bestScore,
+    depth: deepest,
+    solved,
+    nodes,
+    values,
+    ms: Math.round(performance.now() - startedAt),
+    memory: Math.round((12 << tableBits) / 1e6),
+    reason: 'search',
+  };
 }

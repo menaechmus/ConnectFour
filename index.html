@@ -99,6 +99,13 @@
     <div class="row">
       <button id="btn-stats" class="btn">Statistics</button>
       <button id="btn-rules" class="btn">How to play</button>
+      <button id="btn-advanced" class="icon-btn" aria-label="Advanced">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle class="teeth" cx="12" cy="12" r="9"/>
+          <circle class="line" cx="12" cy="12" r="6.4"/>
+          <circle class="line" cx="12" cy="12" r="2"/>
+        </svg>
+      </button>
       <button id="btn-about" class="icon-btn" aria-label="About">
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <circle class="line" cx="12" cy="12" r="9"/>
@@ -183,6 +190,37 @@
   </div>
 </div>
 
+<div id="advanced" class="overlay" hidden>
+  <div class="dialog wide">
+    <h2>Advanced</h2>
+    <p class="muted">These settings are for Guru, and apply from its next move. The other levels play the same whatever is set here.</p>
+    <div class="option stacked">
+      <span>Limit Guru by</span>
+      <div class="choice" data-setting="guruBy">
+        <button data-value="time">Time</button>
+        <button data-value="depth">Lookahead</button>
+      </div>
+    </div>
+    <div class="option stacked" id="row-guru-time">
+      <span>Thinking time for each move</span>
+      <div class="choice tight" data-setting="guruMs">
+        <button data-value="4000">4 s</button>
+        <button data-value="10000">10 s</button>
+        <button data-value="30000">30 s</button>
+        <button data-value="60000">1 min</button>
+        <button data-value="120000">2 min</button>
+      </div>
+    </div>
+    <div class="option" id="row-guru-depth">
+      <label for="guru-depth">Discs to look ahead (1 to 42)</label>
+      <input id="guru-depth" class="depth-field" type="number" min="1" max="42" step="1" inputmode="numeric" autocomplete="off">
+    </div>
+    <p id="guru-note" class="muted"></p>
+    <div id="advanced-stats" class="stack"></div>
+    <button class="btn primary" data-close>Close</button>
+  </div>
+</div>
+
 <div id="rules" class="overlay" hidden>
   <div class="dialog wide">
     <h2>How to play</h2>
@@ -191,7 +229,7 @@
       <li><b>A full board.</b> If all 42 spaces fill with no line of four, the game is a draw. Nobody scores, and in a match the next game starts.</li>
       <li><b>A match.</b> The first to win the number of games set on the menu wins the match. With Take turns, the first move passes to the other side each game, draws included.</li>
       <li><b>Moving first.</b> It matters more than it looks. With perfect play, whoever moves first and starts in the middle column always wins.</li>
-      <li><b>The computer.</b> Easy overlooks things. Medium never misses a win or a block, but it doesn't plan. Hard sees a few moves ahead and is sharp in a fight, but it can be outplayed. Guru thinks for a few seconds over each move, and plays perfectly as soon as it can work the rest of the game out.</li>
+      <li><b>The computer.</b> Easy overlooks things. Medium never misses a win or a block, but it doesn't plan. Hard sees a few moves ahead and is sharp in a fight, but it can be outplayed. Guru thinks for 4 seconds a move, or longer if you set it to in Advanced, and plays perfectly as soon as it can work the rest of the game out.</li>
       <li><b>Undo.</b> Against the computer, Undo takes back your last move and its reply, as many times as you like, even after you lose or draw. A win that used Undo still counts as a win, but it doesn't add to your streak or set a record, and the statistics list it separately.</li>
     </ol>
     <p class="muted">Wi-Fi: each of you plays on your own phone. One chooses Wi-Fi on the menu, types a name and taps Host a game; the other chooses Wi-Fi, taps Join a game and enters the four letters on the host's screen, or opens the link the host shares. The host's match length and hints settings apply to both. A phone that drops out comes back by itself, and while it is away the host can play for it.</p>

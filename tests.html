@@ -504,10 +504,58 @@ test('engine: gives a legal move on the smallest budget, and keeps to its budget
 });
 
 test('engine: the same question gets the same answer', () => {
-  const ask = () => think([3, 2, 3, 4, 1], { nodes: 30000, fresh: true, seed: 5 });
+  const ask = () => {
+    const { ms, ...answer } = think([3, 2, 3, 4, 1], { nodes: 30000, fresh: true, seed: 5 });
+    return answer;
+  };
   equal(ask(), ask(), 'twice');
   const noisy = () => think([3, 2], { noise: 25, depth: 4, seed: 7, fresh: true }).column;
   equal(noisy(), noisy(), 'with noise');
+});
+
+test('engine: reports how a search is going, and how it went', () => {
+  const heard = [];
+  const { nodes, ms, memory } = think([3, 2, 3], { ms: 700, fresh: true, progress: note => heard.push(note) });
+  equal(heard.length >= 2, true, `${heard.length} reports`);
+  for (let i = 1; i < heard.length; i++) {
+    equal(heard[i].nodes > heard[i - 1].nodes && heard[i].ms > heard[i - 1].ms && heard[i].depth >= heard[i - 1].depth, true, 'each further on');
+  }
+  equal(nodes > heard.at(-1).nodes, true, 'the last report before the end');
+  equal(ms >= 600 && ms < 1200, true, `took ${ms} ms`);
+  equal(memory, 50, 'about 50 MB');
+  equal(think([0, 1, 0, 1, 0, 1]).ms, 0, 'no search, no time');
+});
+
+test('engine: a lookahead target is reached, and a time limit still stops it', () => {
+  const { depth, nodes } = think([3, 2], { depth: 8, ms: 20000, fresh: true });
+  equal(depth, 8, 'eight discs');
+  equal(nodes > 100, true, `${nodes} nodes`);
+  const started = performance.now();
+  const far = think([3, 2], { depth: 40, ms: 200, fresh: true });
+  equal(far.depth < 40 && !far.solved, true, `stopped at ${far.depth}`);
+  equal(performance.now() - started < 700, true, 'on time');
+});
+
+test('engine: a smaller table than asked for is kept between searches', () => {
+  const real = globalThis.Int32Array;
+  let made = 0;
+  globalThis.Int32Array = class extends real {
+    constructor(size) {
+      made++;
+      if (size > 3 << 16) throw new RangeError('no memory');
+      super(size);
+    }
+  };
+  try {
+    const first = think([3, 2], { depth: 5, fresh: true, bits: 20, seed: 8 });
+    equal(made, 5, 'tried 20 bits down to 16');
+    equal(first.memory, 1, 'and got less');
+    const second = think([3, 2, 1], { depth: 5, bits: 20, seed: 8 });
+    equal(made, 5, 'not tried again, which would empty it');
+    equal(second.memory, 1, 'the same table');
+  } finally {
+    globalThis.Int32Array = real;
+  }
 });
 
 test('engine: plays the proved opening only from the book', () => {
@@ -798,6 +846,17 @@ await testAsync('worker: a cancelled question rejects, and the next is answered'
   const { column } = await ask({ type: 'move', moves: [0, 1, 0, 1, 0, 2], level: 'hard', seed: 3 });
   equal(column, 0, 'answered by a new worker');
   equal(performance.now() - started < 3000, true, 'without waiting for the old search');
+});
+
+await testAsync('worker: a long search is left to finish, and says how it goes', async () => {
+  const heard = [];
+  const started = performance.now();
+  const result = await ask({ type: 'move', moves: [3, 2], level: 'guru', seed: 5, limit: { ms: 9000 } }, note => heard.push(note));
+  const took = performance.now() - started;
+  equal(took > 8500, true, `took ${Math.round(took)} ms`);
+  equal('onPage' in result, false, 'on the worker');
+  equal(result.depth >= 15, true, `depth ${result.depth}`);
+  equal(heard.length > 20, true, `${heard.length} reports`);
 });
 
 // ---- The levels, playing each other -------------------------------------------------
