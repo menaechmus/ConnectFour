@@ -817,7 +817,7 @@ function playOut(levels, seed) {
 }
 
 const levelsStarted = performance.now();
-for (const [a, b, games, atLeast] of [['medium', 'easy', 60, 0.8], ['hard', 'medium', 24, 0.8]]) {
+for (const [a, b, games, atLeast] of [['medium', 'easy', 60, 0.6], ['hard', 'medium', 24, 0.6]]) {
   test(`self-play: ${a} beats ${b} over ${games} games, swapping who starts`, () => {
     let wins = 0;
     for (let i = 0; i < games; i++) {

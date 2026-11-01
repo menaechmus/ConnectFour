@@ -8,11 +8,16 @@
 import { boardOf, lineThrough, openColumns, COLUMNS, ROWS } from './game.js';
 import { think, rngOf, PROVED } from './engine.js';
 
+// Noise blurs a level's judgement of quiet positions but never a proved win or
+// loss, whose scores are far beyond it. So Hard is sharp in a fight and can
+// still be outplayed: its noise is what leaves room to beat it, and Medium
+// differs by not looking ahead. Tuned by self-play (dev/tune.html), where each
+// beats the level below about 80% of the time.
 export const LEVELS = {
   easy: { takeWin: 0.9, block: 0.7 },
-  medium: { depth: 4, noise: 25 },
-  hard: { depth: 10, noise: 6 },
-  guru: { ms: 1500, book: true, defend: true },
+  medium: { depth: 1, noise: 50 },
+  hard: { depth: 4, noise: 60 },
+  guru: { ms: 3000, book: true, defend: true },
 };
 
 // Hints use the search with a short budget, and the book, but no noise: a hint

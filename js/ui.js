@@ -793,7 +793,7 @@ function confirmFirst(title, text, button, action) {
 }
 
 // On the host's phone, the main button also acts for the other phone while
-// it is out of touch: it plays as Hard would, after asking.
+// it is out of touch: it plays what a hint would say, after asking.
 function playFor(side) {
   const name = nameOf(side);
   confirmFirst(`Play for ${name}?`, `${name}'s phone is out of touch. The computer makes its best choice for ${name}.`, 'Play', () => {
@@ -806,7 +806,7 @@ function playFor(side) {
       if (result && standIn() === side && stamp() === asked) commit(() => drop(match, side, result.column));
       else render();
     };
-    ask({ type: 'move', moves: match.moves, level: 'hard', seed: seedOf(match) }).then(done, () => done(null));
+    ask({ type: 'hint', moves: match.moves, seed: seedOf(match) }).then(done, () => done(null));
   });
 }
 
